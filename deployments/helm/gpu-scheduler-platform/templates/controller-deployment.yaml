@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gpu-scheduler-platform.fullname" . }}-controller
+  namespace: {{ include "gpu-scheduler-platform.namespace" . }}
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  selector:
+    matchLabels:
+      app: {{ include "gpu-scheduler-platform.fullname" . }}-controller
+  template:
+    metadata:
+      labels:
+        app: {{ include "gpu-scheduler-platform.fullname" . }}-controller
+    spec:
+      serviceAccountName: {{ include "gpu-scheduler-platform.serviceAccountName" . }}
+      containers:
+        - name: controller
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.images.controller.repository }}:{{ .Values.images.controller.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["-config", "/app/configs/controller.yaml"]
+          ports:
+            - containerPort: 9092
+          volumeMounts:
+            - name: config
+              mountPath: /app/configs
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "gpu-scheduler-platform.fullname" . }}-config

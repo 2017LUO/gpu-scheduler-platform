@@ -1,0 +1,50 @@
+service:
+  name: gpu-agent
+  env: dev
+  version: v0.1.0
+
+agent:
+  node_name: ""
+  heartbeat_interval: 10s
+  collect_interval: 10s
+  report_timeout: 5s
+  enable_dcgm: false
+  enable_nvidia_smi: true
+  enable_mig_discovery: true
+  enable_topology_discovery: true
+
+reporter:
+  mode: http
+  http:
+    endpoint: "http://127.0.0.1:8080/internal/agent/report"
+    timeout: 5s
+  grpc:
+    endpoint: "127.0.0.1:18080"
+    timeout: 5s
+
+kubernetes:
+  in_cluster: false
+  kubeconfig: ""
+  qps: 20
+  burst: 50
+
+observability:
+  metrics:
+    enabled: true
+    addr: ":9094"
+    path: "/metrics"
+  tracing:
+    enabled: false
+    endpoint: ""
+    sample_ratio: 0.1
+  pprof:
+    enabled: false
+    addr: ":6064"
+
+logging:
+  level: info
+  format: console
+  output_paths:
+    - stdout
+  error_output_paths:
+    - stderr

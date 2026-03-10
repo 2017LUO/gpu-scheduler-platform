@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "gpu-scheduler-platform.fullname" . }}-agent
+  namespace: {{ include "gpu-scheduler-platform.namespace" . }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "gpu-scheduler-platform.fullname" . }}-agent
+  template:
+    metadata:
+      labels:
+        app: {{ include "gpu-scheduler-platform.fullname" . }}-agent
+    spec:
+      serviceAccountName: {{ include "gpu-scheduler-platform.serviceAccountName" . }}
+      containers:
+        - name: agent
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.images.agent.repository }}:{{ .Values.images.agent.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["-config", "/app/configs/agent.yaml"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - containerPort: 9094
+          volumeMounts:
+            - name: config
+              mountPath: /app/configs
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "gpu-scheduler-platform.fullname" . }}-config

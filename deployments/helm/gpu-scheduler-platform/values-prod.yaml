@@ -1,0 +1,14 @@
+global:
+  imageRegistry: your-registry.example.com
+
+images:
+  apiServer:
+    tag: v0.1.0
+  scheduler:
+    tag: v0.1.0
+  controller:
+    tag: v0.1.0
+  webhook:
+    tag: v0.1.0
+  agent:
+    tag: v0.1.0

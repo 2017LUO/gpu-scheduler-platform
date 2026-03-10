@@ -1,0 +1,17 @@
+logging:
+  level: info
+  format: json
+  output_paths:
+    - stdout
+  error_output_paths:
+    - stderr
+  sampling:
+    enabled: false
+    initial: 100
+    thereafter: 100
+
+audit:
+  enabled: true
+  log_request_body: false
+  log_response_body: false
+  max_body_bytes: 2048

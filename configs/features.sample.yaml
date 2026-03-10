@@ -1,0 +1,10 @@
+features:
+  enable_preemption: true
+  enable_mig: false
+  enable_topology_aware: true
+  enable_fragmentation_score: true
+  enable_gang_scheduling: false
+  enable_quota_enforcement: true
+  enable_audit_log: true
+  enable_controller_recovery: true
+  enable_agent_reporting: true

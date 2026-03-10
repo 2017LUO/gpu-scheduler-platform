@@ -1,0 +1,67 @@
+service:
+  name: gpu-scheduler
+  env: dev
+  version: v0.1.0
+
+scheduler:
+  schedule_interval: 2s
+  max_concurrent_cycles: 4
+  pending_batch_size: 50
+  reservation_ttl: 30s
+  bind_timeout: 15s
+  enable_preemption: true
+  enable_gang_scheduling: false
+  enable_topology_aware: true
+  enable_mig: false
+
+leader_election:
+  enabled: true
+  lease_name: "gpu-scheduler-leader"
+  lease_namespace: "gpu-system"
+  lease_duration: 15s
+  renew_deadline: 10s
+  retry_period: 2s
+
+mysql:
+  dsn: "root:123456@tcp(127.0.0.1:3306)/gpu_scheduler?charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime: 30m
+  conn_max_idle_time: 10m
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+  dial_timeout: 3s
+  read_timeout: 2s
+  write_timeout: 2s
+  pool_size: 20
+  min_idle_conns: 5
+
+kubernetes:
+  in_cluster: false
+  kubeconfig: ""
+  qps: 50
+  burst: 100
+
+observability:
+  metrics:
+    enabled: true
+    addr: ":9091"
+    path: "/metrics"
+  tracing:
+    enabled: false
+    endpoint: ""
+    sample_ratio: 0.1
+  pprof:
+    enabled: true
+    addr: ":6061"
+
+logging:
+  level: info
+  format: console
+  output_paths:
+    - stdout
+  error_output_paths:
+    - stderr

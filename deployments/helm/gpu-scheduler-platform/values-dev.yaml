@@ -1,0 +1,14 @@
+global:
+  imageRegistry: local
+
+images:
+  apiServer:
+    tag: dev
+  scheduler:
+    tag: dev
+  controller:
+    tag: dev
+  webhook:
+    tag: dev
+  agent:
+    tag: dev

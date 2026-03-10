@@ -1,0 +1,46 @@
+service:
+  name: gpu-webhook
+  env: dev
+  version: v0.1.0
+
+server:
+  https:
+    addr: ":9443"
+    cert_file: "/tls/tls.crt"
+    key_file: "/tls/tls.key"
+    read_timeout: 10s
+    write_timeout: 10s
+    shutdown_timeout: 20s
+
+webhook:
+  enable_mutating: true
+  enable_validating: true
+  failure_policy: Fail
+  side_effects: None
+
+kubernetes:
+  in_cluster: false
+  kubeconfig: ""
+  qps: 20
+  burst: 50
+
+observability:
+  metrics:
+    enabled: true
+    addr: ":9093"
+    path: "/metrics"
+  tracing:
+    enabled: false
+    endpoint: ""
+    sample_ratio: 0.1
+  pprof:
+    enabled: false
+    addr: ":6063"
+
+logging:
+  level: info
+  format: console
+  output_paths:
+    - stdout
+  error_output_paths:
+    - stderr

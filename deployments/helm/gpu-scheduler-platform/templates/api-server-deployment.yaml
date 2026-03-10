@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gpu-scheduler-platform.fullname" . }}-api-server
+  namespace: {{ include "gpu-scheduler-platform.namespace" . }}
+spec:
+  replicas: {{ .Values.apiServer.replicas }}
+  selector:
+    matchLabels:
+      app: {{ include "gpu-scheduler-platform.fullname" . }}-api-server
+  template:
+    metadata:
+      labels:
+        app: {{ include "gpu-scheduler-platform.fullname" . }}-api-server
+    spec:
+      serviceAccountName: {{ include "gpu-scheduler-platform.serviceAccountName" . }}
+      containers:
+        - name: api-server
+          image: "{{ .Values.global.imageRegistry }}/{{ .Values.images.apiServer.repository }}:{{ .Values.images.apiServer.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["-config", "/app/configs/api-server.yaml"]
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: config
+              mountPath: /app/configs
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "gpu-scheduler-platform.fullname" . }}-config

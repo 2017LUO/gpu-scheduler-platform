@@ -1,0 +1,64 @@
+service:
+  name: gpu-api-server
+  env: dev
+  version: v0.1.0
+
+server:
+  http:
+    addr: ":8080"
+    read_timeout: 10s
+    write_timeout: 15s
+    idle_timeout: 60s
+    shutdown_timeout: 20s
+
+security:
+  enable_authn: false
+  enable_authz: false
+  jwt:
+    issuer: "gpu-scheduler-platform"
+    secret: "change-me-in-production"
+    expire: 24h
+
+mysql:
+  dsn: "root:123456@tcp(127.0.0.1:3306)/gpu_scheduler?charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime: 30m
+  conn_max_idle_time: 10m
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+  dial_timeout: 3s
+  read_timeout: 2s
+  write_timeout: 2s
+  pool_size: 20
+  min_idle_conns: 5
+
+observability:
+  metrics:
+    enabled: true
+    path: "/metrics"
+  tracing:
+    enabled: false
+    endpoint: ""
+    sample_ratio: 0.1
+  pprof:
+    enabled: true
+    path_prefix: "/debug/pprof"
+
+logging:
+  level: info
+  format: console
+  output_paths:
+    - stdout
+  error_output_paths:
+    - stderr
+
+features:
+  enable_queue_api: true
+  enable_policy_api: true
+  enable_quota_api: true
+  enable_tenant_api: true
+  enable_cluster_api: true

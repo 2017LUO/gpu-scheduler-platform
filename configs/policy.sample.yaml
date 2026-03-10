@@ -1,0 +1,39 @@
+scheduler_policy:
+  queue:
+    mode: priority_fair
+    aging_seconds: 300
+
+  fairness:
+    enabled: true
+    strategy: tenant_weighted
+    default_weight: 1
+
+  placement:
+    same_node_first: true
+    binpack: true
+    spread: false
+    topology_aware: true
+    fragmentation_aware: true
+
+  preemption:
+    enabled: true
+    reclaim_batch_size: 5
+    allow_cross_tenant: false
+
+  quota:
+    enabled: true
+    default_max_gpu_per_tenant: 8
+    default_max_jobs_per_tenant: 20
+
+  mig:
+    enabled: false
+    profiles:
+      - "1g.10gb"
+      - "2g.20gb"
+
+  scoring_weights:
+    resource_fit: 30
+    topology: 25
+    fragmentation: 20
+    utilization: 15
+    spread: 10
