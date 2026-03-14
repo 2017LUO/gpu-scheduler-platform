@@ -4,12 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 )
 
 func ValidateAPIServerConfig(cfg *APIServerConfig) error {
 	if cfg == nil {
-		return errors.New("api server config is nil")
+		return errors.New("config is nil")
 	}
 	if err := validateService(cfg.Service); err != nil {
 		return fmt.Errorf("service: %w", err)
@@ -37,7 +36,7 @@ func ValidateAPIServerConfig(cfg *APIServerConfig) error {
 
 func ValidateSchedulerConfig(cfg *SchedulerConfig) error {
 	if cfg == nil {
-		return errors.New("scheduler config is nil")
+		return errors.New("config is nil")
 	}
 	if err := validateService(cfg.Service); err != nil {
 		return fmt.Errorf("service: %w", err)
@@ -68,7 +67,7 @@ func ValidateSchedulerConfig(cfg *SchedulerConfig) error {
 
 func ValidateControllerConfig(cfg *ControllerAppConfig) error {
 	if cfg == nil {
-		return errors.New("controller config is nil")
+		return errors.New("config is nil")
 	}
 	if err := validateService(cfg.Service); err != nil {
 		return fmt.Errorf("service: %w", err)
@@ -99,7 +98,7 @@ func ValidateControllerConfig(cfg *ControllerAppConfig) error {
 
 func ValidateWebhookConfig(cfg *WebhookAppConfig) error {
 	if cfg == nil {
-		return errors.New("webhook config is nil")
+		return errors.New("config is nil")
 	}
 	if err := validateService(cfg.Service); err != nil {
 		return fmt.Errorf("service: %w", err)
@@ -124,7 +123,7 @@ func ValidateWebhookConfig(cfg *WebhookAppConfig) error {
 
 func ValidateAgentConfig(cfg *AgentConfig) error {
 	if cfg == nil {
-		return errors.New("agent config is nil")
+		return errors.New("config is nil")
 	}
 	if err := validateService(cfg.Service); err != nil {
 		return fmt.Errorf("service: %w", err)
@@ -228,14 +227,46 @@ func validateRedis(cfg RedisConfig) error {
 }
 
 func validateObservability(cfg ObservabilityConfig) error {
+	if cfg.Server.Enabled && strings.TrimSpace(cfg.Server.Addr) == "" {
+		return errors.New("observability.server.addr is required when observability server is enabled")
+	}
+
 	if cfg.Metrics.Enabled {
-		if cfg.Metrics.Path == "" {
+		if strings.TrimSpace(cfg.Metrics.Path) == "" {
 			return errors.New("metrics path is required when metrics is enabled")
 		}
+		if !strings.HasPrefix(cfg.Metrics.Path, "/") {
+			return errors.New("metrics path must start with '/'")
+		}
 	}
+
 	if cfg.Tracing.SampleRatio < 0 || cfg.Tracing.SampleRatio > 1 {
 		return errors.New("tracing sample_ratio must be in [0,1]")
 	}
+
+	if cfg.Tracing.Enabled {
+		if strings.TrimSpace(cfg.Tracing.Endpoint) == "" {
+			return errors.New("tracing endpoint is required when tracing is enabled")
+		}
+		if cfg.Tracing.Insecure && cfg.Tracing.TLS.Enabled {
+			return errors.New("tracing insecure and tracing tls.enabled cannot both be true")
+		}
+		if cfg.Tracing.TLS.Enabled {
+			if (cfg.Tracing.TLS.CertFile == "") != (cfg.Tracing.TLS.KeyFile == "") {
+				return errors.New("tracing tls cert_file and key_file must be configured together")
+			}
+		}
+	}
+
+	if cfg.PProf.Enabled {
+		if strings.TrimSpace(cfg.PProf.PathPrefix) == "" {
+			return errors.New("pprof path_prefix is required when pprof is enabled")
+		}
+		if !strings.HasPrefix(cfg.PProf.PathPrefix, "/") {
+			return errors.New("pprof path_prefix must start with '/'")
+		}
+	}
+
 	return nil
 }
 
@@ -278,13 +309,19 @@ func validateLeaderElection(cfg LeaderElectionConfig) error {
 		return nil
 	}
 	if strings.TrimSpace(cfg.LeaseName) == "" {
-		return errors.New("lease_name is required")
+		return errors.New("lease_name is required when leader election is enabled")
 	}
 	if strings.TrimSpace(cfg.LeaseNamespace) == "" {
-		return errors.New("lease_namespace is required")
+		return errors.New("lease_namespace is required when leader election is enabled")
 	}
-	if cfg.LeaseDuration <= 0 || cfg.RenewDeadline <= 0 || cfg.RetryPeriod <= 0 {
-		return errors.New("leader election durations must be > 0")
+	if cfg.LeaseDuration <= 0 {
+		return errors.New("lease_duration must be > 0")
+	}
+	if cfg.RenewDeadline <= 0 {
+		return errors.New("renew_deadline must be > 0")
+	}
+	if cfg.RetryPeriod <= 0 {
+		return errors.New("retry_period must be > 0")
 	}
 	if cfg.RenewDeadline >= cfg.LeaseDuration {
 		return errors.New("renew_deadline must be less than lease_duration")
@@ -312,9 +349,20 @@ func validateSchedulerCore(cfg SchedulerCoreConfig) error {
 }
 
 func validateController(cfg ControllerConfig) error {
-	if cfg.Workers.GPUJob <= 0 || cfg.Workers.Node <= 0 || cfg.Workers.Pod <= 0 ||
-		cfg.Workers.Quota <= 0 || cfg.Workers.Policy <= 0 {
-		return errors.New("all controller workers must be > 0")
+	if cfg.Workers.GPUJob <= 0 {
+		return errors.New("controller.workers.gpujob must be > 0")
+	}
+	if cfg.Workers.Node <= 0 {
+		return errors.New("controller.workers.node must be > 0")
+	}
+	if cfg.Workers.Pod <= 0 {
+		return errors.New("controller.workers.pod must be > 0")
+	}
+	if cfg.Workers.Quota <= 0 {
+		return errors.New("controller.workers.quota must be > 0")
+	}
+	if cfg.Workers.Policy <= 0 {
+		return errors.New("controller.workers.policy must be > 0")
 	}
 	if cfg.ResyncPeriod <= 0 {
 		return errors.New("resync_period must be > 0")
@@ -326,10 +374,13 @@ func validateController(cfg ControllerConfig) error {
 }
 
 func validateWebhook(cfg WebhookConfig) error {
-	fp := strings.TrimSpace(cfg.FailurePolicy)
-	if fp != "Fail" && fp != "Ignore" {
-		return errors.New("failure_policy must be Fail or Ignore")
+	fp := strings.ToLower(strings.TrimSpace(cfg.FailurePolicy))
+	switch fp {
+	case "fail", "ignore":
+	default:
+		return fmt.Errorf("unsupported failure_policy %q", cfg.FailurePolicy)
 	}
+
 	if strings.TrimSpace(cfg.SideEffects) == "" {
 		return errors.New("side_effects is required")
 	}
@@ -346,6 +397,9 @@ func validateAgent(cfg AgentCoreConfig) error {
 	if cfg.ReportTimeout <= 0 {
 		return errors.New("report_timeout must be > 0")
 	}
+	if !cfg.EnableDCGM && !cfg.EnableNvidiaSMI {
+		return errors.New("at least one of enable_dcgm or enable_nvidia_smi must be true")
+	}
 	return nil
 }
 
@@ -354,24 +408,20 @@ func validateReporter(cfg ReporterConfig) error {
 	switch mode {
 	case "http":
 		if strings.TrimSpace(cfg.HTTP.Endpoint) == "" {
-			return errors.New("http.endpoint is required when reporter mode is http")
+			return errors.New("reporter.http.endpoint is required when reporter mode is http")
 		}
 		if cfg.HTTP.Timeout <= 0 {
-			return errors.New("http.timeout must be > 0")
+			return errors.New("reporter.http.timeout must be > 0")
 		}
 	case "grpc":
 		if strings.TrimSpace(cfg.GRPC.Endpoint) == "" {
-			return errors.New("grpc.endpoint is required when reporter mode is grpc")
+			return errors.New("reporter.grpc.endpoint is required when reporter mode is grpc")
 		}
 		if cfg.GRPC.Timeout <= 0 {
-			return errors.New("grpc.timeout must be > 0")
+			return errors.New("reporter.grpc.timeout must be > 0")
 		}
 	default:
 		return fmt.Errorf("unsupported reporter mode %q", cfg.Mode)
 	}
 	return nil
-}
-
-func IsZeroDuration(d time.Duration) bool {
-	return d == 0
 }

@@ -5,7 +5,7 @@ import (
 	"flag"
 	"os"
 
-	"gpu-scheduler-platform/internal/app/scheduler"
+	schedulerapp "gpu-scheduler-platform/internal/app/scheduler"
 	"gpu-scheduler-platform/internal/bootstrap"
 
 	"go.uber.org/zap"
@@ -21,7 +21,7 @@ func main() {
 		panic(err)
 	}
 
-	app, err := scheduler.New(cfg)
+	app, err := schedulerapp.New(cfg)
 	if err != nil {
 		panic(err)
 	}

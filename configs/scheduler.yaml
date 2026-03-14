@@ -1,6 +1,6 @@
 service:
   name: gpu-scheduler
-  env: dev
+  env: prod
   version: v0.1.0
 
 scheduler:
@@ -12,25 +12,25 @@ scheduler:
   enable_preemption: true
   enable_gang_scheduling: false
   enable_topology_aware: true
-  enable_mig: false
+  enable_mig: true
 
 leader_election:
   enabled: true
-  lease_name: "gpu-scheduler-leader"
-  lease_namespace: "gpu-system"
+  lease_name: gpu-scheduler-leader
+  lease_namespace: gpu-system
   lease_duration: 15s
   renew_deadline: 10s
   retry_period: 2s
 
 mysql:
-  dsn: "root:123456@tcp(127.0.0.1:3306)/gpu_scheduler?charset=utf8mb4&parseTime=True&loc=Local"
+  dsn: "root:123456@tcp(mysql.gpu-system.svc.cluster.local:3306)/gpu_scheduler?charset=utf8mb4&parseTime=True&loc=Local"
   max_open_conns: 50
   max_idle_conns: 10
   conn_max_lifetime: 30m
   conn_max_idle_time: 10m
 
 redis:
-  addr: "127.0.0.1:6379"
+  addr: "redis.gpu-system.svc.cluster.local:6379"
   password: ""
   db: 0
   dial_timeout: 3s
@@ -40,27 +40,38 @@ redis:
   min_idle_conns: 5
 
 kubernetes:
-  in_cluster: false
+  in_cluster: true
   kubeconfig: ""
   qps: 50
   burst: 100
 
 observability:
-  metrics:
+  server:
     enabled: true
     addr: ":9091"
+  metrics:
+    enabled: true
     path: "/metrics"
   tracing:
     enabled: false
     endpoint: ""
     sample_ratio: 0.1
+    insecure: true
+    headers: {}
+    tls:
+      enabled: false
+      cert_file: ""
+      key_file: ""
+      ca_file: ""
+      insecure_skip_verify: false
+      server_name: ""
   pprof:
-    enabled: true
-    addr: ":6061"
+    enabled: false
+    path_prefix: "/debug/pprof"
 
 logging:
   level: info
-  format: console
+  format: json
   output_paths:
     - stdout
   error_output_paths:

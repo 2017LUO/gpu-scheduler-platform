@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package nodeagent.v1;
+
+option go_package = "gpu-scheduler-platform/api/proto/nodeagent/v1;nodeagentv1";
+
+// AgentReporterService：节点 agent 向控制面上报数据的统一服务。
+service AgentReporterService {
+  // Report：统一上报入口。
+  // 当前可承载：
+  // 1. AgentReport（节点采集快照）
+  // 2. heartbeat（节点心跳）
+  rpc Report(ReportRequest) returns (ReportResponse);
+}
+
+// ReportRequest：统一上报请求。
+// 当前阶段采用 JSON 透传，便于快速演进 Go 侧结构。
+message ReportRequest {
+  // payload_type:
+  // - "agent_report"
+  // - "heartbeat"
+  string payload_type = 1;
+
+  // JSON 编码后的 payload
+  string body_json = 2;
+
+  // 内容类型，当前固定 application/json
+  string content_type = 3;
+
+  // 发送时间（UTC Unix 秒）
+  int64 sent_at_unix = 4;
+
+  // 节点名，便于服务端快速路由与日志检索
+  string node_name = 5;
+}
+
+// ReportResponse：统一上报响应。
+message ReportResponse {
+  bool accepted = 1;
+  string message = 2;
+}

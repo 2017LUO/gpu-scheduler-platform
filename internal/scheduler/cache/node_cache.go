@@ -1,39 +1,55 @@
 package cache
 
-import "gpu-scheduler-platform/internal/domain/cluster"
+import (
+	model "gpu-scheduler-platform/internal/repo/models"
+	"sync"
+)
 
 type NodeCache struct {
-	nodes map[string]cluster.Node
+	mu    sync.RWMutex
+	items map[string]*model.Node
 }
 
-func NewNodeCache(snapshot *cluster.Snapshot) *NodeCache {
-	out := &NodeCache{
-		nodes: make(map[string]cluster.Node),
+func NewNodeCache() *NodeCache {
+	return &NodeCache{
+		items: make(map[string]*model.Node),
 	}
-	if snapshot == nil {
-		return out
+}
+
+func (c *NodeCache) Set(node *model.Node) {
+	if node == nil || node.NodeName == "" {
+		return
 	}
-	for _, n := range snapshot.Nodes {
-		out.nodes[n.Name] = n
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cp := *node
+	c.items[node.NodeName] = &cp
+}
+
+func (c *NodeCache) Get(name string) (*model.Node, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	n, ok := c.items[name]
+	if !ok {
+		return nil, false
+	}
+	cp := *n
+	return &cp, true
+}
+
+func (c *NodeCache) List() []*model.Node {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]*model.Node, 0, len(c.items))
+	for _, n := range c.items {
+		cp := *n
+		out = append(out, &cp)
 	}
 	return out
 }
 
-func (c *NodeCache) Get(nodeName string) (cluster.Node, bool) {
-	if c == nil {
-		return cluster.Node{}, false
-	}
-	n, ok := c.nodes[nodeName]
-	return n, ok
-}
-
-func (c *NodeCache) All() []cluster.Node {
-	if c == nil {
-		return nil
-	}
-	out := make([]cluster.Node, 0, len(c.nodes))
-	for _, n := range c.nodes {
-		out = append(out, n)
-	}
-	return out
+func (c *NodeCache) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[string]*model.Node)
 }

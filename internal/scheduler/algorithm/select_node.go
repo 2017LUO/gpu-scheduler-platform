@@ -1,105 +1,93 @@
 package algorithm
 
 import (
+	"context"
 	"sort"
 
-	"gpu-scheduler-platform/internal/domain/cluster"
-	"gpu-scheduler-platform/internal/domain/job"
+	model "gpu-scheduler-platform/internal/repo/models"
+	schedframework "gpu-scheduler-platform/internal/scheduler/framework"
 )
 
-func SelectNode(snapshot *cluster.Snapshot, j job.Job) (*PlacementDecision, bool) {
-	if snapshot == nil {
-		return nil, false
+func SelectNode(
+	ctx context.Context,
+	deps Dependencies,
+	cs *schedframework.CycleState,
+	job *model.GPUJob,
+	nodes []*model.Node,
+) (*model.Node, []string, map[string]int64, map[string][]string, *schedframework.Status) {
+	if job == nil {
+		return nil, nil, nil, nil, schedframework.NewStatus(schedframework.CodeError, "job is nil")
+	}
+	if len(nodes) == 0 {
+		return nil, nil, nil, nil, schedframework.NewStatus(schedframework.CodeUnschedulable, "no schedulable nodes")
 	}
 
-	nodes := snapshot.ReadyNodes()
-	scores := make([]NodeScore, 0, len(nodes))
+	inventory := schedframework.NodeGPUInventory{}
+	if deps.LoadNodeInventory != nil {
+		var err error
+		inventory, err = deps.LoadNodeInventory(ctx, nodes)
+		if err != nil {
+			return nil, nil, nil, nil, schedframework.AsError(err)
+		}
+	}
+	cs.Write(schedframework.StateKeyNodeGPUInventory, inventory)
 
-	for _, n := range nodes {
-		gpus, ok := SelectGPUs(n, j.Requirement)
-		if !ok {
+	candidates := make([]NodeScore, 0, len(nodes))
+	filterReasons := make(map[string][]string, len(nodes))
+	scoreMap := make(map[string]int64, len(nodes))
+
+	for _, node := range nodes {
+		if node == nil {
 			continue
 		}
-		score := scoreNode(n, gpus, j)
-		scores = append(scores, NodeScore{
-			Node:  n,
+
+		if st := deps.Framework.RunFilter(cs, job, node); !st.IsSuccess() {
+			filterReasons[node.NodeName] = append([]string(nil), st.Reasons()...)
+			continue
+		}
+
+		score, st := deps.Framework.RunScore(cs, job, node)
+		if !st.IsSuccess() {
+			filterReasons[node.NodeName] = append([]string(nil), st.Reasons()...)
+			continue
+		}
+
+		candidates = append(candidates, NodeScore{
+			Node:  node,
 			Score: score,
 		})
+		scoreMap[node.NodeName] = score
 	}
 
-	if len(scores) == 0 {
-		return nil, false
+	if len(candidates) == 0 {
+		return nil, nil, scoreMap, filterReasons, schedframework.NewStatus(schedframework.CodeUnschedulable, "all nodes filtered out")
 	}
 
-	sort.Slice(scores, func(i, j int) bool {
-		if scores[i].Score == scores[j].Score {
-			return scores[i].Node.Name < scores[j].Node.Name
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].Score != candidates[j].Score {
+			return candidates[i].Score > candidates[j].Score
 		}
-		return scores[i].Score > scores[j].Score
+		if candidates[i].Node.FreeMemoryMiB != candidates[j].Node.FreeMemoryMiB {
+			return candidates[i].Node.FreeMemoryMiB > candidates[j].Node.FreeMemoryMiB
+		}
+		if candidates[i].Node.HealthyGPUCount != candidates[j].Node.HealthyGPUCount {
+			return candidates[i].Node.HealthyGPUCount > candidates[j].Node.HealthyGPUCount
+		}
+		return candidates[i].Node.NodeName < candidates[j].Node.NodeName
 	})
 
-	best := scores[0]
-	gpus, ok := SelectGPUs(best.Node, j.Requirement)
-	if !ok {
-		return nil, false
+	topK := deps.TopK
+	if topK <= 0 || topK > len(candidates) {
+		topK = len(candidates)
 	}
 
-	return &PlacementDecision{
-		Job:    j,
-		Node:   best.Node,
-		GPUs:   gpus,
-		Reason: "best-fit",
-	}, true
-}
-
-func scoreNode(n cluster.Node, gpus []cluster.GPU, j job.Job) int {
-	score := 0
-
-	if j.Requirement.RequireSameNode {
-		score += 100
+	candidateNames := make([]string, 0, topK)
+	for i := 0; i < topK; i++ {
+		candidateNames = append(candidateNames, candidates[i].Node.NodeName)
 	}
 
-	// 倾向刚好能放下的小节点，保留大块资源
-	freeCount := 0
-	for _, g := range n.GPUs {
-		if !g.Allocated && !g.Reserved && (!j.Requirement.RequireHealthy || g.Healthy) {
-			freeCount++
-		}
-	}
-	score += 100 - freeCount
+	selected := candidates[0].Node
+	cs.Write(schedframework.StateKeySelectedNodeName, selected.NodeName)
 
-	// 倾向更小显存满足
-	var totalFreeMem int64
-	for _, g := range gpus {
-		totalFreeMem += g.FreeMemoryMiB
-	}
-	score += int(1_000_000 / max64(totalFreeMem, 1))
-
-	if j.Requirement.RequireNVLink && hasNVLinkBetweenAll(n, gpus) {
-		score += 200
-	}
-
-	return score
-}
-
-func hasNVLinkBetweenAll(n cluster.Node, gpus []cluster.GPU) bool {
-	if len(gpus) <= 1 {
-		return true
-	}
-	for i := 0; i < len(gpus); i++ {
-		for j := i + 1; j < len(gpus); j++ {
-			link, ok := n.Topology.LinkBetween(gpus[i].ID, gpus[j].ID)
-			if !ok || link.Type != cluster.LinkNVLink {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func max64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
+	return selected, candidateNames, scoreMap, filterReasons, nil
 }

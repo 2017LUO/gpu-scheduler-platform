@@ -2,194 +2,251 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"gpu-scheduler-platform/internal/domain/cluster"
-	"gpu-scheduler-platform/internal/domain/event"
-	"gpu-scheduler-platform/internal/domain/job"
-	"gpu-scheduler-platform/internal/repo"
+	model "gpu-scheduler-platform/internal/repo/models"
+	repoimpl "gpu-scheduler-platform/internal/repo/mysql"
 	"gpu-scheduler-platform/internal/scheduler/algorithm"
-	cachepkg "gpu-scheduler-platform/internal/scheduler/cache"
-	"gpu-scheduler-platform/internal/util"
+	schedcache "gpu-scheduler-platform/internal/scheduler/cache"
+	schedframework "gpu-scheduler-platform/internal/scheduler/framework"
+	filterplugin "gpu-scheduler-platform/internal/scheduler/plugins/filter"
+	permitplugin "gpu-scheduler-platform/internal/scheduler/plugins/permit"
+	reserveplugin "gpu-scheduler-platform/internal/scheduler/plugins/reserve"
+	scoreplugin "gpu-scheduler-platform/internal/scheduler/plugins/score"
+	schedqueue "gpu-scheduler-platform/internal/scheduler/queue"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type SchedulerService struct {
-	jobs         repo.JobRepository
-	events       repo.JobEventRepository
-	snapshots    repo.NodeSnapshotRepository
-	allocations  repo.AllocationRepository
-	reservations repo.ReservationRepository
-	txManager    repo.TxManager
+	db               *gorm.DB
+	logger           *zap.Logger
+	repos            *repoimpl.Repos
+	queue            schedqueue.Interface
+	framework        *schedframework.Framework
+	snapshotCache    *schedcache.SnapshotCache
+	nodeCache        *schedcache.NodeCache
+	jobCache         *schedcache.JobCache
+	reservationCache *schedcache.ReservationCache
 
-	snapshotCache    *cachepkg.SnapshotCache
-	reservationCache *cachepkg.ReservationCache
+	placement    *PlacementService
+	fairness     *FairnessService
+	preemption   *PreemptionService
+	housekeeping *HousekeepingService
 
-	fairness  *FairnessService
-	placement *PlacementService
-
-	logger         *zap.Logger
-	reservationTTL time.Duration
-	batchSize      int
-}
-
-type SchedulerCycleResult struct {
-	Scanned   int
-	Scheduled int
-	Skipped   int
-	Failed    int
+	nowFunc          func() time.Time
+	reservationTTL   time.Duration
+	nodeScoreTopK    int
+	enablePreemption bool
 }
 
 func NewSchedulerService(
-	jobs repo.JobRepository,
-	events repo.JobEventRepository,
-	snapshots repo.NodeSnapshotRepository,
-	allocations repo.AllocationRepository,
-	reservations repo.ReservationRepository,
-	txManager repo.TxManager,
-	snapshotCache *cachepkg.SnapshotCache,
-	reservationCache *cachepkg.ReservationCache,
-	fairness *FairnessService,
-	placement *PlacementService,
-	logger *zap.Logger,
-	reservationTTL time.Duration,
-	batchSize int,
-) *SchedulerService {
-	if reservationTTL <= 0 {
-		reservationTTL = 30 * time.Second
+	db *gorm.DB,
+	lg *zap.Logger,
+	queue schedqueue.Interface,
+	fw *schedframework.Framework,
+	snapshotCache *schedcache.SnapshotCache,
+	nodeCache *schedcache.NodeCache,
+	jobCache *schedcache.JobCache,
+	reservationCache *schedcache.ReservationCache,
+) (*SchedulerService, error) {
+	if db == nil {
+		return nil, fmt.Errorf("db is nil")
 	}
-	if batchSize <= 0 {
-		batchSize = 50
+	if lg == nil {
+		lg = zap.NewNop()
 	}
+	if queue == nil {
+		return nil, fmt.Errorf("queue is nil")
+	}
+	if fw == nil {
+		return nil, fmt.Errorf("framework is nil")
+	}
+
+	repos, err := repoimpl.NewRepos(db)
+	if err != nil {
+		return nil, err
+	}
+
+	placement := NewPlacementService(repos, lg)
+	fairness := NewFairnessService(repos, lg)
+	preemption := NewPreemptionService(repos, lg)
+	housekeeping := NewHousekeepingService(repos, lg)
+
+	fw.AddFilter(filterplugin.NewResourceFit())
+	fw.AddFilter(filterplugin.NewModelMatch())
+	fw.AddFilter(filterplugin.NewMIGFit())
+	fw.AddFilter(filterplugin.NewTopologyFit())
+
+	fw.AddScore(scoreplugin.NewBinpack())
+	fw.AddScore(scoreplugin.NewSpread())
+	fw.AddScore(scoreplugin.NewTopologyScore())
+	fw.AddScore(scoreplugin.NewFragmentationScore())
+	fw.AddScore(scoreplugin.NewUtilizationScore())
+
+	fw.AddReserve(reserveplugin.NewReservation(repos, reservationCache, 45*time.Second, lg))
+	fw.AddPermit(permitplugin.NewGangPermit())
+
 	return &SchedulerService{
-		jobs:             jobs,
-		events:           events,
-		snapshots:        snapshots,
-		allocations:      allocations,
-		reservations:     reservations,
-		txManager:        txManager,
+		db:               db,
+		logger:           lg,
+		repos:            repos,
+		queue:            queue,
+		framework:        fw,
 		snapshotCache:    snapshotCache,
+		nodeCache:        nodeCache,
+		jobCache:         jobCache,
 		reservationCache: reservationCache,
-		fairness:         fairness,
 		placement:        placement,
-		logger:           logger,
-		reservationTTL:   reservationTTL,
-		batchSize:        batchSize,
-	}
+		fairness:         fairness,
+		preemption:       preemption,
+		housekeeping:     housekeeping,
+		nowFunc:          func() time.Time { return time.Now().UTC() },
+		reservationTTL:   45 * time.Second,
+		nodeScoreTopK:    5,
+		enablePreemption: true,
+	}, nil
 }
 
-func (s *SchedulerService) RunOneCycle(ctx context.Context) (*SchedulerCycleResult, error) {
-	if s == nil || s.jobs == nil || s.snapshots == nil || s.allocations == nil || s.reservations == nil || s.txManager == nil {
-		return nil, util.ErrUnavailable
+func (s *SchedulerService) WarmUp(ctx context.Context) error {
+	if err := s.refreshNodes(ctx); err != nil {
+		return err
 	}
-
-	result := &SchedulerCycleResult{}
-
-	snapshot, err := s.snapshotCache.Get(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("load latest snapshot: %w", err)
+	if err := s.refreshQueuedJobs(ctx); err != nil {
+		return err
 	}
-
-	pendingJobs, err := s.jobs.ListPending(ctx, repo.PendingJobFilter{Limit: s.batchSize})
-	if err != nil {
-		return nil, fmt.Errorf("list pending jobs: %w", err)
-	}
-	result.Scanned = len(pendingJobs)
-
-	ordered := s.fairness.OrderJobs(pendingJobs)
-	now := time.Now().UTC()
-
-	for _, j := range ordered {
-		if s.reservationCache.Exists(j.ID, now) {
-			result.Skipped++
-			continue
+	if s.housekeeping != nil {
+		if err := s.housekeeping.CleanupExpiredReservations(ctx); err != nil {
+			return err
 		}
-
-		ok, err := s.scheduleOne(ctx, snapshot, j, now)
-		if err != nil {
-			result.Failed++
-			if s.logger != nil {
-				s.logger.Warn("schedule job failed", zap.String("job_id", j.ID), zap.Error(err))
-			}
-			continue
-		}
-		if !ok {
-			result.Skipped++
-			continue
-		}
-		result.Scheduled++
 	}
-
-	return result, nil
+	return nil
 }
 
-func (s *SchedulerService) scheduleOne(ctx context.Context, snapshot *cluster.Snapshot, j job.Job, now time.Time) (bool, error) {
-	decision, err := s.placement.Place(ctx, snapshot, j)
-	if err != nil {
-		_ = s.createEventBestEffort(ctx, event.Event{
-			ID:         uuid.NewString(),
-			JobID:      j.ID,
-			TenantID:   j.TenantID,
-			Reason:     event.ReasonSchedulingFailed,
-			Message:    err.Error(),
-			Source:     "scheduler",
-			OccurredAt: now,
-		})
-		return false, nil
-	}
-
-	reservation := algorithm.BuildReservation(decision, s.reservationTTL, now)
-	allocationRecord := algorithm.BuildAllocation(decision, now)
-
-	err = s.txManager.WithinTx(ctx, func(txCtx context.Context) error {
-		if err := s.jobs.UpdateStatus(txCtx, j.ID, job.StatusScheduling, "scheduling started"); err != nil {
-			return err
-		}
-
-		if err := s.reservations.Create(txCtx, reservation); err != nil {
-			return err
-		}
-		if err := s.allocations.Create(txCtx, allocationRecord); err != nil {
-			return err
-		}
-
-		j.Status = job.StatusBound
-		j.Message = "allocation committed"
-		j.ScheduledAt = &now
-		j.UpdatedAt = now
-
-		if err := s.jobs.Update(txCtx, &j); err != nil {
-			return err
-		}
-
-		if err := s.events.Create(txCtx, &event.Event{
-			ID:         uuid.NewString(),
-			JobID:      j.ID,
-			TenantID:   j.TenantID,
-			Reason:     event.ReasonSchedulingSucceeded,
-			Message:    fmt.Sprintf("scheduled to node=%s gpus=%d", decision.Node.Name, len(decision.GPUs)),
-			Source:     "scheduler",
-			OccurredAt: now,
-		}); err != nil {
-			return err
-		}
+func (s *SchedulerService) RunHousekeeping(ctx context.Context) error {
+	if s.housekeeping == nil {
 		return nil
+	}
+	return s.housekeeping.CleanupExpiredReservations(ctx)
+}
+
+func (s *SchedulerService) RunOnce(ctx context.Context) error {
+	if err := s.refreshNodes(ctx); err != nil {
+		return err
+	}
+	if err := s.refreshQueuedJobs(ctx); err != nil {
+		return err
+	}
+
+	job, ok := s.queue.Pop()
+	if !ok {
+		return nil
+	}
+	s.jobCache.Set(job)
+
+	if _, err := s.repos.Allocations.GetByJobID(ctx, job.ID); err == nil {
+		s.logger.Info("skip already allocated job", zap.String("job_id", job.ID))
+		return nil
+	} else if !errors.Is(err, repoimpl.ErrNotFound) {
+		return err
+	}
+
+	snapshot := s.snapshotCache.Get()
+	if snapshot == nil || len(snapshot.Nodes) == 0 {
+		s.logger.Warn("skip scheduling because snapshot is empty", zap.String("job_id", job.ID))
+		return nil
+	}
+
+	s.logger.Info("schedule job",
+		zap.String("job_id", job.ID),
+		zap.String("tenant_id", job.TenantID),
+		zap.String("namespace", job.Namespace),
+		zap.String("name", job.Name),
+		zap.Int("candidate_nodes", len(snapshot.Nodes)),
+	)
+
+	outcome, err := algorithm.ScheduleOne(ctx, algorithm.Dependencies{
+		DB:                s.db,
+		Repos:             s.repos,
+		Framework:         s.framework,
+		ReservationCache:  s.reservationCache,
+		Logger:            s.logger,
+		Now:               s.nowFunc,
+		ReservationTTL:    s.reservationTTL,
+		TopK:              s.nodeScoreTopK,
+		LoadNodeInventory: s.placement.LoadNodeInventory,
+		SelectNodeGPUs:    s.placement.SelectNodeGPUs,
+	}, job, snapshot.Nodes)
+	if err != nil {
+		return err
+	}
+
+	if outcome.NeedsPreemption && s.enablePreemption && s.preemption != nil {
+		changed, msg, preemptErr := s.preemption.TryPreempt(ctx, job, snapshot.Nodes)
+		if preemptErr != nil {
+			return preemptErr
+		}
+		if changed {
+			s.logger.Info("preemption triggered for pending job",
+				zap.String("job_id", job.ID),
+				zap.String("message", msg),
+			)
+		}
+	}
+
+	return nil
+}
+
+func (s *SchedulerService) refreshNodes(ctx context.Context) error {
+	items, err := s.repos.Nodes.ListSchedulable(ctx, "READY", repoimpl.PageQuery{
+		Limit:  1000,
+		Offset: 0,
 	})
 	if err != nil {
-		return false, err
+		return fmt.Errorf("refresh nodes: %w", err)
 	}
 
-	s.reservationCache.Put(j.ID, reservation.ExpireAt)
-	s.snapshotCache.Invalidate()
-	return true, nil
+	s.nodeCache.Reset()
+	nodes := make([]*model.Node, 0, len(items))
+
+	for i := range items {
+		item := items[i]
+		s.nodeCache.Set(&item)
+		cp := item
+		nodes = append(nodes, &cp)
+	}
+
+	s.snapshotCache.Set(nodes)
+	return nil
 }
 
-func (s *SchedulerService) createEventBestEffort(ctx context.Context, e event.Event) error {
-	if s.events == nil {
-		return nil
+func (s *SchedulerService) refreshQueuedJobs(ctx context.Context) error {
+	items, err := s.repos.GPUJobs.List(ctx, repoimpl.GPUJobFilter{
+		Status: "QUEUED",
+	}, repoimpl.PageQuery{
+		Limit:  1000,
+		Offset: 0,
+	})
+	if err != nil {
+		return fmt.Errorf("refresh queued jobs: %w", err)
 	}
-	return s.events.Create(ctx, &e)
+
+	if s.fairness != nil {
+		items = s.fairness.Reorder(ctx, items)
+	}
+
+	s.queue.Clear()
+	s.jobCache.Reset()
+
+	for i := range items {
+		job := items[i]
+		if err := s.queue.Push(&job); err != nil {
+			s.logger.Warn("push queued job failed", zap.String("job_id", job.ID), zap.Error(err))
+			continue
+		}
+	}
+	return nil
 }

@@ -64,6 +64,10 @@ func defaultLeaderElectionConfig(name string) LeaderElectionConfig {
 
 func defaultObservabilityConfig() ObservabilityConfig {
 	return ObservabilityConfig{
+		Server: ObservabilityServerConfig{
+			Enabled: true,
+			Addr:    ":9090",
+		},
 		Metrics: MetricsConfig{
 			Enabled: true,
 			Path:    "/metrics",
@@ -72,9 +76,19 @@ func defaultObservabilityConfig() ObservabilityConfig {
 			Enabled:     false,
 			Endpoint:    "",
 			SampleRatio: 0.1,
+			Insecure:    true,
+			Headers:     map[string]string{},
+			TLS: TLSConfig{
+				Enabled:            false,
+				CertFile:           "",
+				KeyFile:            "",
+				CAFile:             "",
+				InsecureSkipVerify: false,
+				ServerName:         "",
+			},
 		},
 		PProf: PProfConfig{
-			Enabled:    true,
+			Enabled:    false,
 			PathPrefix: "/debug/pprof",
 		},
 	}
@@ -120,6 +134,11 @@ func ApplyAPIServerDefaults(cfg *APIServerConfig) {
 
 	applyMySQLDefaults(&cfg.MySQL)
 	applyRedisDefaults(&cfg.Redis)
+
+	if cfg.Observability.Server.Addr == "" {
+		cfg.Observability.Server.Addr = ":9090"
+	}
+
 	applyObservabilityDefaults(&cfg.Observability)
 	applyLoggingDefaults(&cfg.Logging)
 
@@ -165,11 +184,8 @@ func ApplySchedulerDefaults(cfg *SchedulerConfig) {
 	cfg.Scheduler.EnableTopologyAware = defaultBool(cfg.Scheduler.EnableTopologyAware, true)
 	cfg.Scheduler.EnableMIG = defaultBool(cfg.Scheduler.EnableMIG, false)
 
-	if cfg.Observability.Metrics.Addr == "" {
-		cfg.Observability.Metrics.Addr = ":9091"
-	}
-	if cfg.Observability.PProf.Addr == "" {
-		cfg.Observability.PProf.Addr = ":6061"
+	if cfg.Observability.Server.Addr == "" {
+		cfg.Observability.Server.Addr = ":9091"
 	}
 
 	applyLeaderElectionDefaults(&cfg.LeaderElection, "gpu-scheduler-leader")
@@ -219,11 +235,8 @@ func ApplyControllerDefaults(cfg *ControllerAppConfig) {
 	cfg.Controller.EnableAllocationRecovery = defaultBool(cfg.Controller.EnableAllocationRecovery, true)
 	cfg.Controller.EnableJobStatusSync = defaultBool(cfg.Controller.EnableJobStatusSync, true)
 
-	if cfg.Observability.Metrics.Addr == "" {
-		cfg.Observability.Metrics.Addr = ":9092"
-	}
-	if cfg.Observability.PProf.Addr == "" {
-		cfg.Observability.PProf.Addr = ":6062"
+	if cfg.Observability.Server.Addr == "" {
+		cfg.Observability.Server.Addr = ":9092"
 	}
 
 	applyLeaderElectionDefaults(&cfg.LeaderElection, "gpu-controller-leader")
@@ -271,13 +284,9 @@ func ApplyWebhookDefaults(cfg *WebhookAppConfig) {
 		cfg.Webhook.SideEffects = "None"
 	}
 
-	if cfg.Observability.Metrics.Addr == "" {
-		cfg.Observability.Metrics.Addr = ":9093"
+	if cfg.Observability.Server.Addr == "" {
+		cfg.Observability.Server.Addr = ":9093"
 	}
-	if cfg.Observability.PProf.Addr == "" {
-		cfg.Observability.PProf.Addr = ":6063"
-	}
-	cfg.Observability.PProf.Enabled = defaultBool(cfg.Observability.PProf.Enabled, false)
 
 	applyKubernetesDefaults(&cfg.Kubernetes)
 	applyObservabilityDefaults(&cfg.Observability)
@@ -308,13 +317,13 @@ func ApplyAgentDefaults(cfg *AgentConfig) {
 	if cfg.Agent.ReportTimeout == 0 {
 		cfg.Agent.ReportTimeout = 5 * time.Second
 	}
-	cfg.Agent.EnableDCGM = defaultBool(cfg.Agent.EnableDCGM, false)
+	cfg.Agent.EnableDCGM = defaultBool(cfg.Agent.EnableDCGM, true)
 	cfg.Agent.EnableNvidiaSMI = defaultBool(cfg.Agent.EnableNvidiaSMI, true)
 	cfg.Agent.EnableMIGDiscovery = defaultBool(cfg.Agent.EnableMIGDiscovery, true)
 	cfg.Agent.EnableTopologyDiscovery = defaultBool(cfg.Agent.EnableTopologyDiscovery, true)
 
 	if cfg.Reporter.Mode == "" {
-		cfg.Reporter.Mode = "http"
+		cfg.Reporter.Mode = "grpc"
 	}
 	if cfg.Reporter.HTTP.Timeout == 0 {
 		cfg.Reporter.HTTP.Timeout = 5 * time.Second
@@ -323,13 +332,9 @@ func ApplyAgentDefaults(cfg *AgentConfig) {
 		cfg.Reporter.GRPC.Timeout = 5 * time.Second
 	}
 
-	if cfg.Observability.Metrics.Addr == "" {
-		cfg.Observability.Metrics.Addr = ":9094"
+	if cfg.Observability.Server.Addr == "" {
+		cfg.Observability.Server.Addr = ":9094"
 	}
-	if cfg.Observability.PProf.Addr == "" {
-		cfg.Observability.PProf.Addr = ":6064"
-	}
-	cfg.Observability.PProf.Enabled = defaultBool(cfg.Observability.PProf.Enabled, false)
 
 	applyKubernetesDefaults(&cfg.Kubernetes)
 	applyObservabilityDefaults(&cfg.Observability)
@@ -368,6 +373,9 @@ func applyRedisDefaults(cfg *RedisConfig) {
 	if cfg.Addr == "" {
 		cfg.Addr = def.Addr
 	}
+	if cfg.DB < 0 {
+		cfg.DB = 0
+	}
 	if cfg.DialTimeout == 0 {
 		cfg.DialTimeout = def.DialTimeout
 	}
@@ -382,8 +390,25 @@ func applyRedisDefaults(cfg *RedisConfig) {
 	}
 	if cfg.MinIdleConns < 0 {
 		cfg.MinIdleConns = 0
-	} else if cfg.MinIdleConns == 0 {
-		cfg.MinIdleConns = def.MinIdleConns
+	}
+}
+
+func applyLoggingDefaults(cfg *LoggingConfig) {
+	if cfg == nil {
+		return
+	}
+	def := defaultLoggingConfig()
+	if cfg.Level == "" {
+		cfg.Level = def.Level
+	}
+	if cfg.Format == "" {
+		cfg.Format = def.Format
+	}
+	if len(cfg.OutputPaths) == 0 {
+		cfg.OutputPaths = def.OutputPaths
+	}
+	if len(cfg.ErrorOutputPaths) == 0 {
+		cfg.ErrorOutputPaths = def.ErrorOutputPaths
 	}
 }
 
@@ -405,6 +430,8 @@ func applyLeaderElectionDefaults(cfg *LeaderElectionConfig, leaseName string) {
 		return
 	}
 	def := defaultLeaderElectionConfig(leaseName)
+
+	cfg.Enabled = defaultBool(cfg.Enabled, def.Enabled)
 	if cfg.LeaseName == "" {
 		cfg.LeaseName = def.LeaseName
 	}
@@ -428,42 +455,54 @@ func applyObservabilityDefaults(cfg *ObservabilityConfig) {
 	}
 	def := defaultObservabilityConfig()
 
+	cfg.Server.Enabled = defaultBool(cfg.Server.Enabled, def.Server.Enabled)
+	if cfg.Server.Addr == "" {
+		cfg.Server.Addr = def.Server.Addr
+	}
+
+	cfg.Metrics.Enabled = defaultBool(cfg.Metrics.Enabled, def.Metrics.Enabled)
 	if cfg.Metrics.Path == "" {
 		cfg.Metrics.Path = def.Metrics.Path
 	}
-	cfg.Metrics.Enabled = defaultBool(cfg.Metrics.Enabled, def.Metrics.Enabled)
 
+	cfg.Tracing.Enabled = defaultBool(cfg.Tracing.Enabled, def.Tracing.Enabled)
+	if cfg.Tracing.Endpoint == "" {
+		cfg.Tracing.Endpoint = def.Tracing.Endpoint
+	}
 	if cfg.Tracing.SampleRatio == 0 {
 		cfg.Tracing.SampleRatio = def.Tracing.SampleRatio
 	}
+	cfg.Tracing.Insecure = defaultBool(cfg.Tracing.Insecure, def.Tracing.Insecure)
+	if cfg.Tracing.Headers == nil {
+		cfg.Tracing.Headers = map[string]string{}
+	}
+	cfg.Tracing.TLS.Enabled = defaultBool(cfg.Tracing.TLS.Enabled, def.Tracing.TLS.Enabled)
+	if cfg.Tracing.TLS.CertFile == "" {
+		cfg.Tracing.TLS.CertFile = def.Tracing.TLS.CertFile
+	}
+	if cfg.Tracing.TLS.KeyFile == "" {
+		cfg.Tracing.TLS.KeyFile = def.Tracing.TLS.KeyFile
+	}
+	if cfg.Tracing.TLS.CAFile == "" {
+		cfg.Tracing.TLS.CAFile = def.Tracing.TLS.CAFile
+	}
+	cfg.Tracing.TLS.InsecureSkipVerify = defaultBool(
+		cfg.Tracing.TLS.InsecureSkipVerify,
+		def.Tracing.TLS.InsecureSkipVerify,
+	)
+	if cfg.Tracing.TLS.ServerName == "" {
+		cfg.Tracing.TLS.ServerName = def.Tracing.TLS.ServerName
+	}
 
+	cfg.PProf.Enabled = defaultBool(cfg.PProf.Enabled, def.PProf.Enabled)
 	if cfg.PProf.PathPrefix == "" {
 		cfg.PProf.PathPrefix = def.PProf.PathPrefix
 	}
 }
 
-func applyLoggingDefaults(cfg *LoggingConfig) {
-	if cfg == nil {
-		return
-	}
-	def := defaultLoggingConfig()
-	if cfg.Level == "" {
-		cfg.Level = def.Level
-	}
-	if cfg.Format == "" {
-		cfg.Format = def.Format
-	}
-	if len(cfg.OutputPaths) == 0 {
-		cfg.OutputPaths = def.OutputPaths
-	}
-	if len(cfg.ErrorOutputPaths) == 0 {
-		cfg.ErrorOutputPaths = def.ErrorOutputPaths
-	}
-}
-
-func defaultBool(v bool, def bool) bool {
-	if v {
+func defaultBool(current bool, def bool) bool {
+	if current {
 		return true
 	}
-	return def && !v
+	return def
 }

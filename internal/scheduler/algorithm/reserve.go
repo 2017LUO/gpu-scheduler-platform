@@ -1,26 +1,33 @@
 package algorithm
 
 import (
-	"time"
+	"context"
 
-	"gpu-scheduler-platform/internal/domain/allocation"
+	model "gpu-scheduler-platform/internal/repo/models"
+	schedframework "gpu-scheduler-platform/internal/scheduler/framework"
 )
 
-func BuildReservation(decision *PlacementDecision, ttl time.Duration, now time.Time) *allocation.Reservation {
-	if decision == nil {
-		return nil
+func Reserve(
+	ctx context.Context,
+	deps Dependencies,
+	cs *schedframework.CycleState,
+	job *model.GPUJob,
+	node *model.Node,
+) *schedframework.Status {
+	if deps.Framework == nil {
+		return schedframework.NewStatus(schedframework.CodeError, "framework is nil")
 	}
-	gpuIDs := make([]string, 0, len(decision.GPUs))
-	for _, g := range decision.GPUs {
-		gpuIDs = append(gpuIDs, g.ID)
-	}
+	return deps.Framework.RunReserve(cs, job, node)
+}
 
-	return &allocation.Reservation{
-		ID:        decision.Job.ID + "-reservation",
-		JobID:     decision.Job.ID,
-		NodeName:  decision.Node.Name,
-		GPUIDs:    gpuIDs,
-		ExpireAt:  now.Add(ttl),
-		CreatedAt: now,
+func CleanupReservation(ctx context.Context, deps Dependencies, job *model.GPUJob) {
+	if job == nil {
+		return
+	}
+	if deps.ReservationCache != nil {
+		deps.ReservationCache.Delete(job.ID)
+	}
+	if deps.Repos != nil && deps.Repos.Reservations != nil {
+		_ = deps.Repos.Reservations.DeleteByJobID(ctx, job.ID)
 	}
 }

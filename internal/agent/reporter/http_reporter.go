@@ -6,52 +6,71 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
-)
 
-type Reporter interface {
-	Report(ctx context.Context, payload any) error
-}
+	obsmetrics "gpu-scheduler-platform/internal/observability/metrics"
+)
 
 type HTTPReporter struct {
 	endpoint string
 	timeout  time.Duration
 	client   *http.Client
+	metrics  *obsmetrics.AgentMetrics
 }
 
-func NewHTTPReporter(endpoint string, timeout time.Duration) *HTTPReporter {
+func NewHTTPReporter(endpoint string, timeout time.Duration, metrics *obsmetrics.AgentMetrics) *HTTPReporter {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+
 	return &HTTPReporter{
 		endpoint: endpoint,
 		timeout:  timeout,
 		client: &http.Client{
 			Timeout: timeout,
 		},
+		metrics: metrics,
 	}
 }
 
-func (r *HTTPReporter) Report(ctx context.Context, payload any) error {
+func (r *HTTPReporter) Report(ctx context.Context, payload any) (retErr error) {
+	start := time.Now()
+	defer func() {
+		if r.metrics != nil {
+			r.metrics.ObserveReport("http", time.Since(start), retErr)
+		}
+	}()
+
+	if strings.TrimSpace(r.endpoint) == "" {
+		retErr = fmt.Errorf("http reporter endpoint is empty")
+		return retErr
+	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal report payload: %w", err)
+		retErr = fmt.Errorf("marshal http payload: %w", err)
+		return retErr
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpoint, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build report request: %w", err)
+		retErr = fmt.Errorf("build http request: %w", err)
+		return retErr
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("send report request: %w", err)
+		retErr = fmt.Errorf("do http request: %w", err)
+		return retErr
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("report endpoint returned status %d", resp.StatusCode)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		retErr = fmt.Errorf("http reporter unexpected status: %s", resp.Status)
+		return retErr
 	}
+
 	return nil
 }

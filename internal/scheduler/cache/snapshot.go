@@ -1,62 +1,59 @@
 package cache
 
 import (
-	"context"
+	model "gpu-scheduler-platform/internal/repo/models"
 	"sync"
 	"time"
-
-	"gpu-scheduler-platform/internal/domain/cluster"
-	"gpu-scheduler-platform/internal/repo"
 )
 
+type Snapshot struct {
+	Nodes       []*model.Node
+	GeneratedAt time.Time
+}
+
 type SnapshotCache struct {
-	mu         sync.RWMutex
-	snapshot   *cluster.Snapshot
-	loadedAt   time.Time
-	ttl        time.Duration
-	repository repo.NodeSnapshotRepository
+	mu       sync.RWMutex
+	snapshot *Snapshot
 }
 
-func NewSnapshotCache(repository repo.NodeSnapshotRepository, ttl time.Duration) *SnapshotCache {
-	if ttl <= 0 {
-		ttl = 2 * time.Second
+func NewSnapshotCache() *SnapshotCache {
+	return &SnapshotCache{}
+}
+
+func (c *SnapshotCache) Set(nodes []*model.Node) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	out := make([]*model.Node, 0, len(nodes))
+	for _, n := range nodes {
+		if n == nil {
+			continue
+		}
+		cp := *n
+		out = append(out, &cp)
 	}
-	return &SnapshotCache{
-		ttl:        ttl,
-		repository: repository,
+
+	c.snapshot = &Snapshot{
+		Nodes:       out,
+		GeneratedAt: time.Now().UTC(),
 	}
 }
 
-func (c *SnapshotCache) Get(ctx context.Context) (*cluster.Snapshot, error) {
+func (c *SnapshotCache) Get() *Snapshot {
 	c.mu.RLock()
-	if c.snapshot != nil && time.Since(c.loadedAt) < c.ttl {
-		s := *c.snapshot
-		c.mu.RUnlock()
-		return &s, nil
+	defer c.mu.RUnlock()
+
+	if c.snapshot == nil {
+		return nil
 	}
-	c.mu.RUnlock()
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.snapshot != nil && time.Since(c.loadedAt) < c.ttl {
-		s := *c.snapshot
-		return &s, nil
+	out := make([]*model.Node, 0, len(c.snapshot.Nodes))
+	for _, n := range c.snapshot.Nodes {
+		cp := *n
+		out = append(out, &cp)
 	}
 
-	s, err := c.repository.GetLatest(ctx)
-	if err != nil {
-		return nil, err
+	return &Snapshot{
+		Nodes:       out,
+		GeneratedAt: c.snapshot.GeneratedAt,
 	}
-	c.snapshot = s
-	c.loadedAt = time.Now()
-	cp := *s
-	return &cp, nil
-}
-
-func (c *SnapshotCache) Invalidate() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.snapshot = nil
-	c.loadedAt = time.Time{}
 }

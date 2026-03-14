@@ -1,47 +1,61 @@
 package cache
 
-import (
-	"sync"
-	"time"
-)
+import "sync"
 
-type reservationItem struct {
-	jobID    string
-	expireAt time.Time
+type Reservation struct {
+	JobID    string
+	NodeName string
+	GPUIDs   []string
 }
 
 type ReservationCache struct {
 	mu    sync.RWMutex
-	items map[string]reservationItem
+	items map[string]*Reservation
 }
 
 func NewReservationCache() *ReservationCache {
 	return &ReservationCache{
-		items: make(map[string]reservationItem),
+		items: make(map[string]*Reservation),
 	}
 }
 
-func (c *ReservationCache) Put(jobID string, expireAt time.Time) {
+func (c *ReservationCache) Set(r *Reservation) {
+	if r == nil || r.JobID == "" {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.items[jobID] = reservationItem{
-		jobID:    jobID,
-		expireAt: expireAt,
+
+	cp := *r
+	if r.GPUIDs != nil {
+		cp.GPUIDs = append([]string(nil), r.GPUIDs...)
 	}
+	c.items[r.JobID] = &cp
 }
 
-func (c *ReservationCache) Exists(jobID string, now time.Time) bool {
+func (c *ReservationCache) Get(jobID string) (*Reservation, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	it, ok := c.items[jobID]
+
+	v, ok := c.items[jobID]
 	if !ok {
-		return false
+		return nil, false
 	}
-	return now.Before(it.expireAt)
+	cp := *v
+	if v.GPUIDs != nil {
+		cp.GPUIDs = append([]string(nil), v.GPUIDs...)
+	}
+	return &cp, true
 }
 
 func (c *ReservationCache) Delete(jobID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.items, jobID)
+}
+
+func (c *ReservationCache) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[string]*Reservation)
 }

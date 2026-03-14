@@ -3,24 +3,36 @@ package reporter
 import (
 	"context"
 	"time"
+
+	obsmetrics "gpu-scheduler-platform/internal/observability/metrics"
 )
 
 type Heartbeat struct {
 	reporter Reporter
+	metrics  *obsmetrics.AgentMetrics
 }
 
-func NewHeartbeat(reporter Reporter) *Heartbeat {
-	return &Heartbeat{reporter: reporter}
-}
-
-func (h *Heartbeat) Send(ctx context.Context, nodeName string) error {
-	if h == nil || h.reporter == nil {
-		return nil
+func NewHeartbeat(reporter Reporter, metrics *obsmetrics.AgentMetrics) *Heartbeat {
+	return &Heartbeat{
+		reporter: reporter,
+		metrics:  metrics,
 	}
+}
+
+func (h *Heartbeat) Send(ctx context.Context, nodeName string) (retErr error) {
+	start := time.Now()
+	defer func() {
+		if h.metrics != nil {
+			h.metrics.ObserveHeartbeat(time.Since(start), retErr)
+		}
+	}()
+
 	payload := map[string]any{
 		"type":      "heartbeat",
 		"node_name": nodeName,
-		"ts":        time.Now().UTC().Format(time.RFC3339Nano),
+		"timestamp": time.Now().UTC(),
 	}
-	return h.reporter.Report(ctx, payload)
+
+	retErr = h.reporter.Report(ctx, payload)
+	return retErr
 }

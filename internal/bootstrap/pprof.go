@@ -2,31 +2,16 @@ package bootstrap
 
 import (
 	"net/http"
-	"net/http/pprof"
-	"strings"
 
 	appcfg "gpu-scheduler-platform/internal/config"
+	obsprofiling "gpu-scheduler-platform/internal/observability/profiling"
 )
 
-func MountPProf(mux *http.ServeMux, cfg appcfg.PProfConfig) {
-	if mux == nil || !cfg.Enabled {
+// RegisterPprof 将 pprof 能力接入指定 mux。
+// 这里保留 bootstrap 层薄封装，方便 app 层统一通过 bootstrap 调用。
+func RegisterPprof(mux *http.ServeMux, cfg appcfg.PProfConfig) {
+	if mux == nil {
 		return
 	}
-
-	prefix := strings.TrimRight(cfg.PathPrefix, "/")
-	if prefix == "" {
-		prefix = "/debug/pprof"
-	}
-
-	mux.HandleFunc(prefix+"/", pprof.Index)
-	mux.HandleFunc(prefix+"/cmdline", pprof.Cmdline)
-	mux.HandleFunc(prefix+"/profile", pprof.Profile)
-	mux.HandleFunc(prefix+"/symbol", pprof.Symbol)
-	mux.HandleFunc(prefix+"/trace", pprof.Trace)
-	mux.Handle(prefix+"/allocs", pprof.Handler("allocs"))
-	mux.Handle(prefix+"/block", pprof.Handler("block"))
-	mux.Handle(prefix+"/goroutine", pprof.Handler("goroutine"))
-	mux.Handle(prefix+"/heap", pprof.Handler("heap"))
-	mux.Handle(prefix+"/mutex", pprof.Handler("mutex"))
-	mux.Handle(prefix+"/threadcreate", pprof.Handler("threadcreate"))
+	obsprofiling.RegisterPprofRoutes(mux, cfg)
 }

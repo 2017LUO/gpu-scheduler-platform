@@ -64,28 +64,44 @@ type RedisConfig struct {
 	MinIdleConns int           `yaml:"min_idle_conns"`
 }
 
-type MetricsConfig struct {
+type ObservabilityServerConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Addr    string `yaml:"addr"`
+}
+
+type MetricsConfig struct {
+	Enabled bool   `yaml:"enabled"`
 	Path    string `yaml:"path"`
 }
 
+type TLSConfig struct {
+	Enabled            bool   `yaml:"enabled"`
+	CertFile           string `yaml:"cert_file"`
+	KeyFile            string `yaml:"key_file"`
+	CAFile             string `yaml:"ca_file"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
+	ServerName         string `yaml:"server_name"`
+}
+
 type TracingConfig struct {
-	Enabled     bool    `yaml:"enabled"`
-	Endpoint    string  `yaml:"endpoint"`
-	SampleRatio float64 `yaml:"sample_ratio"`
+	Enabled     bool              `yaml:"enabled"`
+	Endpoint    string            `yaml:"endpoint"`
+	SampleRatio float64           `yaml:"sample_ratio"`
+	Insecure    bool              `yaml:"insecure"`
+	Headers     map[string]string `yaml:"headers"`
+	TLS         TLSConfig         `yaml:"tls"`
 }
 
 type PProfConfig struct {
 	Enabled    bool   `yaml:"enabled"`
-	Addr       string `yaml:"addr"`
 	PathPrefix string `yaml:"path_prefix"`
 }
 
 type ObservabilityConfig struct {
-	Metrics MetricsConfig `yaml:"metrics"`
-	Tracing TracingConfig `yaml:"tracing"`
-	PProf   PProfConfig   `yaml:"pprof"`
+	Server  ObservabilityServerConfig `yaml:"server"`
+	Metrics MetricsConfig             `yaml:"metrics"`
+	Tracing TracingConfig             `yaml:"tracing"`
+	PProf   PProfConfig               `yaml:"pprof"`
 }
 
 type LoggingConfig struct {
@@ -109,6 +125,7 @@ type LeaderElectionConfig struct {
 	LeaseDuration  time.Duration `yaml:"lease_duration"`
 	RenewDeadline  time.Duration `yaml:"renew_deadline"`
 	RetryPeriod    time.Duration `yaml:"retry_period"`
+	Identity       string        `yaml:"identity"`
 }
 
 type APIFeaturesConfig struct {
@@ -192,15 +209,40 @@ type APIServerConfig struct {
 	Features      APIFeaturesConfig   `yaml:"features"`
 }
 
-type SchedulerConfig struct {
-	Service        ServiceConfig        `yaml:"service"`
-	Scheduler      SchedulerCoreConfig  `yaml:"scheduler"`
+type SchedulerRuntimeConfig struct {
+	ScheduleInterval time.Duration `yaml:"schedule_interval"`
+	MaxBatchSize     int           `yaml:"max_batch_size"`
+	WorkerCount      int           `yaml:"worker_count"`
+	DefaultQueue     string        `yaml:"default_queue"`
+	NodeScoreTopK    int           `yaml:"node_score_top_k"`
+	EnablePreemption bool          `yaml:"enable_preemption"`
+	EnableFairness   bool          `yaml:"enable_fairness"`
+	EnableGangPermit bool          `yaml:"enable_gang_permit"`
+
 	LeaderElection LeaderElectionConfig `yaml:"leader_election"`
-	MySQL          MySQLConfig          `yaml:"mysql"`
-	Redis          RedisConfig          `yaml:"redis"`
-	Kubernetes     KubernetesConfig     `yaml:"kubernetes"`
-	Observability  ObservabilityConfig  `yaml:"observability"`
-	Logging        LoggingConfig        `yaml:"logging"`
+}
+
+type SchedulerConfig struct {
+	Service       ServiceConfig          `yaml:"service"`
+	Server        HTTPServersConfig      `yaml:"server"`
+	Security      SecurityConfig         `yaml:"security"`
+	MySQL         MySQLConfig            `yaml:"mysql"`
+	Redis         RedisConfig            `yaml:"redis"`
+	Kubernetes    KubernetesConfig       `yaml:"kubernetes"`
+	Observability ObservabilityConfig    `yaml:"observability"`
+	Logging       LoggingConfig          `yaml:"logging"`
+	Features      APIFeaturesConfig      `yaml:"features"`
+	Scheduler     SchedulerRuntimeConfig `yaml:"scheduler"`
+}
+
+type SchedulerLeaderElectionConfig struct {
+	EnableLeaderElection bool          `yaml:"enable_leader_election"`
+	LeaseName            string        `yaml:"lease_name"`
+	LeaseNamespace       string        `yaml:"lease_namespace"`
+	LeaseDuration        time.Duration `yaml:"lease_duration"`
+	RenewDeadline        time.Duration `yaml:"renew_deadline"`
+	RetryPeriod          time.Duration `yaml:"retry_period"`
+	Identity             string        `yaml:"identity"`
 }
 
 type ControllerAppConfig struct {
@@ -213,7 +255,6 @@ type ControllerAppConfig struct {
 	Observability  ObservabilityConfig  `yaml:"observability"`
 	Logging        LoggingConfig        `yaml:"logging"`
 }
-
 type WebhookAppConfig struct {
 	Service       ServiceConfig       `yaml:"service"`
 	Server        HTTPSServersConfig  `yaml:"server"`

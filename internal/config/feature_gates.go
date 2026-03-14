@@ -1,40 +1,52 @@
 package config
 
-type FeatureGates struct {
-	EnablePreemption         bool
-	EnableMIG                bool
-	EnableTopologyAware      bool
-	EnableFragmentationScore bool
-	EnableGangScheduling     bool
-	EnableQuotaEnforcement   bool
-	EnableAuditLog           bool
-	EnableControllerRecovery bool
-	EnableAgentReporting     bool
+type FeatureGates map[string]bool
+
+func (f FeatureGates) Enabled(name string) bool {
+	if f == nil {
+		return false
+	}
+	return f[name]
 }
 
-func DefaultFeatureGates() FeatureGates {
+func APIServerFeatureGates(cfg APIFeaturesConfig) FeatureGates {
 	return FeatureGates{
-		EnablePreemption:         true,
-		EnableMIG:                false,
-		EnableTopologyAware:      true,
-		EnableFragmentationScore: true,
-		EnableGangScheduling:     false,
-		EnableQuotaEnforcement:   true,
-		EnableAuditLog:           true,
-		EnableControllerRecovery: true,
-		EnableAgentReporting:     true,
+		"queue_api":   cfg.EnableQueueAPI,
+		"policy_api":  cfg.EnablePolicyAPI,
+		"quota_api":   cfg.EnableQuotaAPI,
+		"tenant_api":  cfg.EnableTenantAPI,
+		"cluster_api": cfg.EnableClusterAPI,
 	}
 }
 
-func FeatureGatesFromScheduler(cfg *SchedulerConfig) FeatureGates {
-	g := DefaultFeatureGates()
-	if cfg == nil {
-		return g
+func SchedulerFeatureGates(cfg SchedulerCoreConfig) FeatureGates {
+	return FeatureGates{
+		"preemption":      cfg.EnablePreemption,
+		"gang_scheduling": cfg.EnableGangScheduling,
+		"topology_aware":  cfg.EnableTopologyAware,
+		"mig":             cfg.EnableMIG,
 	}
+}
 
-	g.EnablePreemption = cfg.Scheduler.EnablePreemption
-	g.EnableMIG = cfg.Scheduler.EnableMIG
-	g.EnableTopologyAware = cfg.Scheduler.EnableTopologyAware
-	g.EnableGangScheduling = cfg.Scheduler.EnableGangScheduling
-	return g
+func ControllerFeatureGates(cfg ControllerConfig) FeatureGates {
+	return FeatureGates{
+		"allocation_recovery": cfg.EnableAllocationRecovery,
+		"job_status_sync":     cfg.EnableJobStatusSync,
+	}
+}
+
+func WebhookFeatureGates(cfg WebhookConfig) FeatureGates {
+	return FeatureGates{
+		"mutating":   cfg.EnableMutating,
+		"validating": cfg.EnableValidating,
+	}
+}
+
+func AgentFeatureGates(cfg AgentCoreConfig) FeatureGates {
+	return FeatureGates{
+		"dcgm":               cfg.EnableDCGM,
+		"nvidia_smi":         cfg.EnableNvidiaSMI,
+		"mig_discovery":      cfg.EnableMIGDiscovery,
+		"topology_discovery": cfg.EnableTopologyDiscovery,
+	}
 }

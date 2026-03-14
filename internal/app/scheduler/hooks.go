@@ -3,13 +3,21 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"gpu-scheduler-platform/internal/bootstrap"
 
 	"go.uber.org/zap"
 )
 
 func (a *App) registerLifecycleHooks() {
 	a.Lifecycle.AppendOnStart(func(ctx context.Context) error {
-		a.Logger.Info("scheduler lifecycle start hook completed")
+		go func() {
+			leader := NewLeaderRunner(a.Config, a.Logger, a.Runner)
+			if err := leader.Run(ctx); err != nil {
+				a.Logger.Error("leader runner exited", zap.Error(err))
+			}
+		}()
 		return nil
 	})
 
@@ -39,14 +47,10 @@ func (a *App) registerLifecycleHooks() {
 	})
 
 	a.Lifecycle.AppendOnStop(func(ctx context.Context) error {
-		return shutdownHTTPServerWithConfig(a)
+		timeout := a.Config.Server.HTTP.ShutdownTimeout
+		if timeout <= 0 {
+			timeout = 20 * time.Second
+		}
+		return bootstrap.ShutdownHTTPServer(a.Logger, a.HTTPServer, timeout)
 	})
-}
-
-func shutdownHTTPServerWithConfig(a *App) error {
-	timeout := a.metricsHTTPConfig().ShutdownTimeout
-	if timeout <= 0 {
-		timeout = 20
-	}
-	return a.shutdownHTTP(timeout)
 }

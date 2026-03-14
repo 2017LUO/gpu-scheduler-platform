@@ -4,39 +4,22 @@ type Response[T any] struct {
 	Code      int    `json:"code"`
 	Message   string `json:"message"`
 	RequestID string `json:"request_id,omitempty"`
-	Data      T      `json:"data,omitempty"`
+	Data      T      `json:"data"`
 }
 
-type PageMeta struct {
-	Limit  int   `json:"limit"`
-	Offset int   `json:"offset"`
-	Total  int64 `json:"total"`
+type ListMeta struct {
+	Limit  int `json:"limit"`
+	Offset int `json:"offset"`
+	Count  int `json:"count"`
 }
 
-type PageResponse[T any] struct {
-	Meta  PageMeta `json:"meta"`
+type ListData[T any] struct {
 	Items []T      `json:"items"`
+	Meta  ListMeta `json:"meta"`
 }
 
-type ErrorBody struct {
-	Code      int    `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id,omitempty"`
+type ErrorData struct {
+	Path string `json:"path,omitempty"`
 }
 
-func OK[T any](requestID string, data T) Response[T] {
-	return Response[T]{
-		Code:      0,
-		Message:   "ok",
-		RequestID: requestID,
-		Data:      data,
-	}
-}
-
-func Err(requestID string, code int, message string) ErrorBody {
-	return ErrorBody{
-		Code:      code,
-		Message:   message,
-		RequestID: requestID,
-	}
-}
+type Empty struct{}

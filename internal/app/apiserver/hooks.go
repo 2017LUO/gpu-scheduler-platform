@@ -3,6 +3,7 @@ package apiserver
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -46,7 +47,7 @@ func (a *App) registerLifecycleHooks() {
 func shutdownHTTPServerWithConfig(a *App) error {
 	timeout := a.Config.Server.HTTP.ShutdownTimeout
 	if timeout <= 0 {
-		timeout = 20
+		timeout = 20 * time.Second
 	}
 	return a.shutdownHTTP(timeout)
 }

@@ -2,17 +2,15 @@ package config
 
 import "fmt"
 
-type Component string
-
 const (
-	ComponentAPIServer  Component = "api-server"
-	ComponentScheduler  Component = "scheduler"
-	ComponentController Component = "controller"
-	ComponentWebhook    Component = "webhook"
-	ComponentAgent      Component = "agent"
+	ComponentAPIServer  = "api-server"
+	ComponentScheduler  = "scheduler"
+	ComponentController = "controller"
+	ComponentWebhook    = "webhook"
+	ComponentAgent      = "agent"
 )
 
-func LoadByComponent(component Component, path string) (any, error) {
+func LoadByComponent(component, path string) (any, error) {
 	switch component {
 	case ComponentAPIServer:
 		return LoadAPIServerConfig(path)

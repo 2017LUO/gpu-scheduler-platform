@@ -1,53 +1,79 @@
 package dto
 
+type AgentHeartbeatRequest struct {
+	NodeName string  `json:"node_name"`
+	Status   string  `json:"status"`
+	Message  *string `json:"message,omitempty"`
+	SeenAt   string  `json:"seen_at,omitempty"`
+}
+
+type AgentHeartbeatResponse struct {
+	NodeName string `json:"node_name"`
+	Status   string `json:"status"`
+	SeenAt   string `json:"seen_at"`
+}
+
 type AgentReportRequest struct {
-	NodeName    string            `json:"node_name"`
-	Timestamp   string            `json:"timestamp"`
-	GPUs        []AgentGPUInfo    `json:"gpus"`
-	MIGs        []AgentMIGInfo    `json:"migs,omitempty"`
-	Topology    []AgentGPULink    `json:"topology,omitempty"`
-	PodBindings []AgentPodGPUInfo `json:"pod_bindings,omitempty"`
+	Version         string                `json:"version"`
+	AgentVersion    string                `json:"agent_version"`
+	ClusterName     string                `json:"cluster_name"`
+	NodeName        string                `json:"node_name"`
+	Source          string                `json:"source"`
+	NodeState       string                `json:"node_state"`
+	Schedulable     bool                  `json:"schedulable"`
+	GPUCount        int                   `json:"gpu_count"`
+	HealthyGPUCount int                   `json:"healthy_gpu_count"`
+	TotalMemoryMiB  int64                 `json:"total_memory_mib"`
+	FreeMemoryMiB   int64                 `json:"free_memory_mib"`
+	Labels          map[string]string     `json:"labels"`
+	Annotations     map[string]string     `json:"annotations"`
+	Topology        map[string]any        `json:"topology"`
+	ReportTime      string                `json:"report_time,omitempty"`
+	GPUs            []AgentGPUDevice      `json:"gpus"`
+	MIGs            []AgentMIGDevice      `json:"migs"`
+	RuntimeBindings []AgentRuntimeBinding `json:"runtime_bindings"`
 }
 
-type AgentGPUInfo struct {
-	ID            string `json:"id"`
-	UUID          string `json:"uuid"`
-	Index         int    `json:"index"`
-	Model         string `json:"model"`
+type AgentGPUDevice struct {
+	UUID              string            `json:"uuid"`
+	GPUIndex          int               `json:"gpu_index"`
+	Model             string            `json:"model"`
+	Vendor            string            `json:"vendor"`
+	Type              string            `json:"type"`
+	MemoryMiB         int64             `json:"memory_mib"`
+	FreeMemoryMiB     int64             `json:"free_memory_mib"`
+	Healthy           bool              `json:"healthy"`
+	Health            string            `json:"health"`
+	MIGEnabled        bool              `json:"mig_enabled"`
+	MIGProfile        string            `json:"mig_profile"`
+	UtilizationGPU    float64           `json:"utilization_gpu"`
+	UtilizationMemory float64           `json:"utilization_memory"`
+	Temperature       float64           `json:"temperature"`
+	PowerWatts        float64           `json:"power_watts"`
+	Allocated         bool              `json:"allocated"`
+	Reserved          bool              `json:"reserved"`
+	Labels            map[string]string `json:"labels"`
+	Annotations       map[string]string `json:"annotations"`
+}
+
+type AgentMIGDevice struct {
+	ParentGPUUUID string `json:"parent_gpu_uuid"`
+	MIGUUID       string `json:"mig_uuid"`
+	Profile       string `json:"profile"`
 	MemoryMiB     int64  `json:"memory_mib"`
-	FreeMemoryMiB int64  `json:"free_memory_mib"`
 	Healthy       bool   `json:"healthy"`
-	Health        string `json:"health"`
+	Allocated     bool   `json:"allocated"`
+	Reserved      bool   `json:"reserved"`
 }
 
-type AgentMIGInfo struct {
-	ID         string `json:"id"`
-	ParentUUID string `json:"parent_uuid"`
-	Profile    string `json:"profile"`
-	MemoryMiB  int64  `json:"memory_mib"`
-}
-
-type AgentGPULink struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-	Type string `json:"type"`
-}
-
-type AgentPodGPUInfo struct {
-	PodName   string   `json:"pod_name"`
+type AgentRuntimeBinding struct {
 	Namespace string   `json:"namespace"`
+	PodName   string   `json:"pod_name"`
 	GPUIDs    []string `json:"gpu_ids"`
 }
 
-type AgentHeartbeatRequest struct {
-	Type     string `json:"type"`
-	NodeName string `json:"node_name"`
-	TS       string `json:"ts"`
-}
-
 type AgentReportResponse struct {
-	Accepted        bool   `json:"accepted"`
-	SnapshotVersion string `json:"snapshot_version"`
-	NodeName        string `json:"node_name"`
-	GPUCount        int    `json:"gpu_count"`
+	NodeName   string `json:"node_name"`
+	SnapshotID uint64 `json:"snapshot_id"`
+	ReportTime string `json:"report_time"`
 }

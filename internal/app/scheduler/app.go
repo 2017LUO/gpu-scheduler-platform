@@ -10,6 +10,10 @@ import (
 	appcfg "gpu-scheduler-platform/internal/config"
 	obslog "gpu-scheduler-platform/internal/observability/logging"
 	obsmetrics "gpu-scheduler-platform/internal/observability/metrics"
+	schedcache "gpu-scheduler-platform/internal/scheduler/cache"
+	schedframework "gpu-scheduler-platform/internal/scheduler/framework"
+	schedqueue "gpu-scheduler-platform/internal/scheduler/queue"
+	schedservice "gpu-scheduler-platform/internal/scheduler/service"
 
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -21,14 +25,21 @@ type App struct {
 	Logger        *zap.Logger
 	DB            *gorm.DB
 	Redis         *redis.Client
-	K8s           *bootstrap.K8sClients
 	Metrics       *obsmetrics.Registry
 	HTTPServer    *http.Server
 	Lifecycle     *bootstrap.Lifecycle
 	TracingCloser bootstrap.TracingCloser
-	LeaderElector bootstrap.LeaderElector
-	Runner        *Runner
-	readyChecks   []ReadyCheck
+
+	Framework        *schedframework.Framework
+	Queue            schedqueue.Interface
+	SnapshotCache    *schedcache.SnapshotCache
+	NodeCache        *schedcache.NodeCache
+	JobCache         *schedcache.JobCache
+	ReservationCache *schedcache.ReservationCache
+	Service          *schedservice.SchedulerService
+	Runner           *Runner
+
+	readyChecks []ReadyCheck
 }
 
 type ReadyCheck struct {
@@ -57,33 +68,56 @@ func New(cfg *appcfg.SchedulerConfig) (*App, error) {
 		return nil, fmt.Errorf("init redis: %w", err)
 	}
 
-	k8sClients, err := bootstrap.NewKubernetesClients(cfg.Kubernetes)
-	if err != nil {
-		return nil, fmt.Errorf("init kubernetes clients: %w", err)
-	}
-
-	tracingCloser, err := bootstrap.InitTracing(cfg.Observability.Tracing)
+	tracingCloser, err := bootstrap.InitTracing(cfg.Service, cfg.Observability.Tracing)
 	if err != nil {
 		return nil, fmt.Errorf("init tracing: %w", err)
 	}
 
 	metricsReg := obsmetrics.NewRegistry()
 	lifecycle := bootstrap.NewLifecycle(lg)
-	leader := bootstrap.NewLeaderElector(cfg.LeaderElection, lg)
 
-	app := &App{
-		Config:        cfg,
-		Logger:        lg,
-		DB:            db,
-		Redis:         rdb,
-		K8s:           k8sClients,
-		Metrics:       metricsReg,
-		Lifecycle:     lifecycle,
-		TracingCloser: tracingCloser,
-		LeaderElector: leader,
+	queue := schedqueue.NewPriorityQueue(4096)
+	snapshotCache := schedcache.NewSnapshotCache()
+	nodeCache := schedcache.NewNodeCache()
+	jobCache := schedcache.NewJobCache()
+	reservationCache := schedcache.NewReservationCache()
+
+	registry := schedframework.NewRegistry()
+	fw := schedframework.NewFramework(registry, lg)
+
+	svc, err := schedservice.NewSchedulerService(
+		db,
+		lg,
+		queue,
+		fw,
+		snapshotCache,
+		nodeCache,
+		jobCache,
+		reservationCache,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("init scheduler service: %w", err)
 	}
 
-	app.Runner = NewRunner(cfg, lg, db, rdb, k8sClients)
+	runner := NewRunner(cfg, lg, svc)
+
+	app := &App{
+		Config:           cfg,
+		Logger:           lg,
+		DB:               db,
+		Redis:            rdb,
+		Metrics:          metricsReg,
+		Lifecycle:        lifecycle,
+		TracingCloser:    tracingCloser,
+		Framework:        fw,
+		Queue:            queue,
+		SnapshotCache:    snapshotCache,
+		NodeCache:        nodeCache,
+		JobCache:         jobCache,
+		ReservationCache: reservationCache,
+		Service:          svc,
+		Runner:           runner,
+	}
 
 	app.readyChecks = []ReadyCheck{
 		{
@@ -102,10 +136,28 @@ func New(cfg *appcfg.SchedulerConfig) (*App, error) {
 				return app.Redis.Ping(ctx).Err()
 			},
 		},
+		{
+			Name: "framework",
+			Fn: func(context.Context) error {
+				if app.Framework == nil {
+					return fmt.Errorf("framework is nil")
+				}
+				return nil
+			},
+		},
+		{
+			Name: "queue",
+			Fn: func(context.Context) error {
+				if app.Queue == nil {
+					return fmt.Errorf("queue is nil")
+				}
+				return nil
+			},
+		},
 	}
 
 	mux := app.buildMux()
-	app.HTTPServer = bootstrap.NewHTTPServer(app.metricsHTTPConfig(), mux)
+	app.HTTPServer = bootstrap.NewHTTPServer(cfg.Server.HTTP, mux)
 
 	app.registerLifecycleHooks()
 
@@ -116,7 +168,7 @@ func (a *App) Start(ctx context.Context) error {
 	if err := a.Lifecycle.Start(ctx); err != nil {
 		return err
 	}
-	return a.runWithLeaderElection(ctx)
+	return bootstrap.RunHTTPServer(ctx, a.Logger, a.HTTPServer)
 }
 
 func (a *App) Stop(ctx context.Context) error {

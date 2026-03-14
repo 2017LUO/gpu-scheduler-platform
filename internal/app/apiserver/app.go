@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	auditpkg "gpu-scheduler-platform/internal/audit"
+	authpkg "gpu-scheduler-platform/internal/auth"
 	"gpu-scheduler-platform/internal/bootstrap"
 	appcfg "gpu-scheduler-platform/internal/config"
 	obslog "gpu-scheduler-platform/internal/observability/logging"
@@ -25,6 +27,9 @@ type App struct {
 	HTTPServer    *http.Server
 	Lifecycle     *bootstrap.Lifecycle
 	TracingCloser bootstrap.TracingCloser
+	JWTManager    *authpkg.JWTManager
+	Authorizer    *authpkg.Authorizer
+	AuditRecorder *auditpkg.Recorder
 	readyChecks   []ReadyCheck
 }
 
@@ -54,13 +59,21 @@ func New(cfg *appcfg.APIServerConfig) (*App, error) {
 		return nil, fmt.Errorf("init redis: %w", err)
 	}
 
-	tracingCloser, err := bootstrap.InitTracing(cfg.Observability.Tracing)
+	tracingCloser, err := bootstrap.InitTracing(cfg.Service, cfg.Observability.Tracing)
 	if err != nil {
 		return nil, fmt.Errorf("init tracing: %w", err)
 	}
 
 	metricsReg := obsmetrics.NewRegistry()
 	lifecycle := bootstrap.NewLifecycle(lg)
+
+	jwtManager := authpkg.NewJWTManager(cfg.Security.JWT)
+	authorizer := authpkg.NewAuthorizer()
+
+	auditRecorder, err := auditpkg.NewRecorder(db, lg)
+	if err != nil {
+		return nil, fmt.Errorf("init audit recorder: %w", err)
+	}
 
 	app := &App{
 		Config:        cfg,
@@ -70,6 +83,9 @@ func New(cfg *appcfg.APIServerConfig) (*App, error) {
 		Metrics:       metricsReg,
 		Lifecycle:     lifecycle,
 		TracingCloser: tracingCloser,
+		JWTManager:    jwtManager,
+		Authorizer:    authorizer,
+		AuditRecorder: auditRecorder,
 	}
 
 	app.readyChecks = []ReadyCheck{
@@ -91,7 +107,10 @@ func New(cfg *appcfg.APIServerConfig) (*App, error) {
 		},
 	}
 
-	mux := app.buildMux()
+	mux, err := app.buildMux()
+	if err != nil {
+		return nil, fmt.Errorf("build http mux: %w", err)
+	}
 	app.HTTPServer = bootstrap.NewHTTPServer(cfg.Server.HTTP, mux)
 
 	app.registerLifecycleHooks()

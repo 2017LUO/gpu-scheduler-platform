@@ -5,96 +5,64 @@ import (
 	"time"
 
 	appcfg "gpu-scheduler-platform/internal/config"
-	obslog "gpu-scheduler-platform/internal/observability/logging"
-	repoimpl "gpu-scheduler-platform/internal/repo/mysql"
-	cachepkg "gpu-scheduler-platform/internal/scheduler/cache"
-	svc "gpu-scheduler-platform/internal/scheduler/service"
+	schedservice "gpu-scheduler-platform/internal/scheduler/service"
 
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
-	"gorm.io/gorm"
 )
 
 type Runner struct {
 	cfg     *appcfg.SchedulerConfig
 	logger  *zap.Logger
-	service *svc.SchedulerService
+	service *schedservice.SchedulerService
 }
 
-func NewRunner(
-	cfg *appcfg.SchedulerConfig,
-	lg *zap.Logger,
-	db *gorm.DB,
-	rdb *redis.Client,
-	_ any,
-) *Runner {
-	repos := repoimpl.NewRepositories(db)
-	snapshotCache := cachepkg.NewSnapshotCache(repos.NodeSnapshots, 2*time.Second)
-	reservationCache := cachepkg.NewReservationCache()
-
-	fairness := svc.NewFairnessService()
-	placement := svc.NewPlacementService()
-
-	schedulerService := svc.NewSchedulerService(
-		repos.Jobs,
-		repos.JobEvents,
-		repos.NodeSnapshots,
-		repos.Allocations,
-		repos.Reservations,
-		repos.TxManager,
-		snapshotCache,
-		reservationCache,
-		fairness,
-		placement,
-		lg,
-		cfg.Scheduler.ReservationTTL,
-		cfg.Scheduler.PendingBatchSize,
-	)
-
+func NewRunner(cfg *appcfg.SchedulerConfig, lg *zap.Logger, svc *schedservice.SchedulerService) *Runner {
+	if lg == nil {
+		lg = zap.NewNop()
+	}
 	return &Runner{
 		cfg:     cfg,
-		logger:  obslog.LoggerOrNop(lg),
-		service: schedulerService,
+		logger:  lg,
+		service: svc,
 	}
 }
 
 func (r *Runner) Run(ctx context.Context) error {
-	ticker := time.NewTicker(r.cfg.Scheduler.ScheduleInterval)
-	defer ticker.Stop()
+	interval := r.cfg.Scheduler.ScheduleInterval
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	housekeepingInterval := 30 * time.Second
+
+	scheduleTicker := time.NewTicker(interval)
+	housekeepingTicker := time.NewTicker(housekeepingInterval)
+	defer scheduleTicker.Stop()
+	defer housekeepingTicker.Stop()
 
 	r.logger.Info("scheduler runner started",
-		zap.Duration("schedule_interval", r.cfg.Scheduler.ScheduleInterval),
-		zap.Int("pending_batch_size", r.cfg.Scheduler.PendingBatchSize),
+		zap.Duration("schedule_interval", interval),
+		zap.Duration("housekeeping_interval", housekeepingInterval),
 	)
+
+	if err := r.service.WarmUp(ctx); err != nil {
+		return err
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			r.logger.Info("scheduler runner stopped")
 			return nil
-		case <-ticker.C:
-			r.runOneCycle(ctx)
+
+		case <-scheduleTicker.C:
+			if err := r.service.RunOnce(ctx); err != nil {
+				r.logger.Warn("scheduler run once failed", zap.Error(err))
+			}
+
+		case <-housekeepingTicker.C:
+			if err := r.service.RunHousekeeping(ctx); err != nil {
+				r.logger.Warn("scheduler housekeeping failed", zap.Error(err))
+			}
 		}
 	}
-}
-
-func (r *Runner) runOneCycle(ctx context.Context) {
-	start := time.Now()
-
-	result, err := r.service.RunOneCycle(ctx)
-	if err != nil {
-		r.logger.Error("scheduler cycle failed",
-			zap.Error(err),
-			zap.Duration("latency", time.Since(start)),
-		)
-		return
-	}
-
-	r.logger.Info("scheduler cycle completed",
-		zap.Int("scanned", result.Scanned),
-		zap.Int("scheduled", result.Scheduled),
-		zap.Int("skipped", result.Skipped),
-		zap.Int("failed", result.Failed),
-		zap.Duration("latency", time.Since(start)),
-	)
 }

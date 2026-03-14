@@ -1,6 +1,6 @@
 service:
   name: gpu-api-server
-  env: dev
+  env: prod
   version: v0.1.0
 
 server:
@@ -12,22 +12,22 @@ server:
     shutdown_timeout: 20s
 
 security:
-  enable_authn: false
-  enable_authz: false
+  enable_authn: true
+  enable_authz: true
   jwt:
     issuer: "gpu-scheduler-platform"
-    secret: "change-me-in-production"
+    secret: "change-me-in-prod"
     expire: 24h
 
 mysql:
-  dsn: "root:123456@tcp(127.0.0.1:3306)/gpu_scheduler?charset=utf8mb4&parseTime=True&loc=Local"
+  dsn: "root:123456@tcp(mysql.gpu-system.svc.cluster.local:3306)/gpu_scheduler?charset=utf8mb4&parseTime=True&loc=Local"
   max_open_conns: 50
   max_idle_conns: 10
   conn_max_lifetime: 30m
   conn_max_idle_time: 10m
 
 redis:
-  addr: "127.0.0.1:6379"
+  addr: "redis.gpu-system.svc.cluster.local:6379"
   password: ""
   db: 0
   dial_timeout: 3s
@@ -37,6 +37,9 @@ redis:
   min_idle_conns: 5
 
 observability:
+  server:
+    enabled: true
+    addr: ":9090"
   metrics:
     enabled: true
     path: "/metrics"
@@ -44,13 +47,22 @@ observability:
     enabled: false
     endpoint: ""
     sample_ratio: 0.1
+    insecure: true
+    headers: {}
+    tls:
+      enabled: false
+      cert_file: ""
+      key_file: ""
+      ca_file: ""
+      insecure_skip_verify: false
+      server_name: ""
   pprof:
-    enabled: true
+    enabled: false
     path_prefix: "/debug/pprof"
 
 logging:
   level: info
-  format: console
+  format: json
   output_paths:
     - stdout
   error_output_paths:

@@ -1,60 +1,50 @@
 package algorithm
 
 import (
+	"context"
 	"sort"
 
-	"gpu-scheduler-platform/internal/domain/cluster"
-	"gpu-scheduler-platform/internal/domain/job"
+	model "gpu-scheduler-platform/internal/repo/models"
+	schedframework "gpu-scheduler-platform/internal/scheduler/framework"
 )
 
-func SelectGPUs(n cluster.Node, req job.Requirement) ([]cluster.GPU, bool) {
-	candidates := make([]cluster.GPU, 0, len(n.GPUs))
-	for _, g := range n.GPUs {
-		if !gpuFits(g, req) {
-			continue
-		}
-		candidates = append(candidates, g)
+func SelectGPU(
+	ctx context.Context,
+	deps Dependencies,
+	cs *schedframework.CycleState,
+	job *model.GPUJob,
+	node *model.Node,
+) ([]string, *schedframework.Status) {
+	if job == nil || node == nil {
+		return nil, schedframework.NewStatus(schedframework.CodeError, "job or node is nil")
+	}
+	if deps.SelectNodeGPUs == nil {
+		return nil, schedframework.NewStatus(schedframework.CodeError, "gpu selector is not configured")
 	}
 
-	if len(candidates) < req.GPUCount {
-		return nil, false
+	items, err := deps.SelectNodeGPUs(ctx, job, node)
+	if err != nil {
+		return nil, schedframework.AsError(err)
+	}
+	if len(items) < job.GPUCount {
+		return nil, schedframework.NewStatus(schedframework.CodeUnschedulable, "not enough matching gpus on selected node")
 	}
 
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].FreeMemoryMiB == candidates[j].FreeMemoryMiB {
-			return candidates[i].Index < candidates[j].Index
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].FreeMemoryMiB != items[j].FreeMemoryMiB {
+			return items[i].FreeMemoryMiB > items[j].FreeMemoryMiB
 		}
-		return candidates[i].FreeMemoryMiB < candidates[j].FreeMemoryMiB
+		if items[i].UtilizationGPU != items[j].UtilizationGPU {
+			return items[i].UtilizationGPU < items[j].UtilizationGPU
+		}
+		return items[i].GPUIndex < items[j].GPUIndex
 	})
 
-	out := make([]cluster.GPU, 0, req.GPUCount)
-	for _, g := range candidates {
-		out = append(out, g)
-		if len(out) == req.GPUCount {
-			return out, true
-		}
+	out := make([]string, 0, job.GPUCount)
+	for i := 0; i < job.GPUCount; i++ {
+		out = append(out, items[i].UUID)
 	}
-	return nil, false
-}
 
-func gpuFits(g cluster.GPU, req job.Requirement) bool {
-	if g.Allocated || g.Reserved {
-		return false
-	}
-	if req.RequireHealthy && !g.Healthy {
-		return false
-	}
-	if req.GPUMemoryMiB > 0 && g.FreeMemoryMiB < req.GPUMemoryMiB {
-		return false
-	}
-	if req.GPUModel != "" && g.Model != req.GPUModel {
-		return false
-	}
-	if req.RequireMIG && !g.MIGEnabled {
-		return false
-	}
-	if req.RequireMIG && req.MIGProfile != "" && g.MIGProfile != req.MIGProfile {
-		return false
-	}
-	return true
+	cs.Write(schedframework.StateKeySelectedGPUUUIDs, out)
+	return out, nil
 }

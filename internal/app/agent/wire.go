@@ -9,7 +9,6 @@ import (
 	"gpu-scheduler-platform/internal/bootstrap"
 	appcfg "gpu-scheduler-platform/internal/config"
 	"gpu-scheduler-platform/internal/middleware"
-	"gpu-scheduler-platform/internal/observability/profiling"
 	"gpu-scheduler-platform/pkg/version"
 
 	"go.uber.org/zap"
@@ -30,10 +29,11 @@ type healthDataPayload struct {
 }
 
 func (a *App) metricsHTTPConfig() appcfg.HTTPServerConfig {
-	addr := a.Config.Observability.Metrics.Addr
-	if addr == "" {
-		addr = ":9094"
+	addr := ":9094"
+	if a != nil && a.Config != nil && a.Config.Observability.Server.Addr != "" {
+		addr = a.Config.Observability.Server.Addr
 	}
+
 	return appcfg.HTTPServerConfig{
 		Addr:            addr,
 		ReadTimeout:     10 * time.Second,
@@ -49,14 +49,19 @@ func (a *App) buildMux() *http.ServeMux {
 	root.Handle("/healthz", a.wrapMiddlewares(http.HandlerFunc(a.handleHealthz)))
 	root.Handle("/readyz", a.wrapMiddlewares(http.HandlerFunc(a.handleReadyz)))
 
-	metricsPath := a.Config.Observability.Metrics.Path
-	if metricsPath == "" {
-		metricsPath = "/metrics"
+	metricsPath := "/metrics"
+	if a != nil && a.Config != nil && a.Config.Observability.Metrics.Path != "" {
+		metricsPath = a.Config.Observability.Metrics.Path
 	}
-	root.Handle(metricsPath, a.wrapMiddlewares(a.Metrics.Handler()))
 
-	if a.Config.Observability.PProf.Enabled {
-		profiling.Mount(root, a.Config.Observability.PProf.PathPrefix)
+	metricsHandler := http.NotFoundHandler()
+	if a != nil && a.Metrics != nil {
+		metricsHandler = a.Metrics.Handler()
+	}
+	root.Handle(metricsPath, a.wrapMiddlewares(metricsHandler))
+
+	if a != nil && a.Config != nil && a.Config.Observability.PProf.Enabled {
+		bootstrap.RegisterPprof(root, a.Config.Observability.PProf)
 	}
 
 	root.Handle("/", a.wrapMiddlewares(http.HandlerFunc(a.handleRoot)))
@@ -64,15 +69,34 @@ func (a *App) buildMux() *http.ServeMux {
 }
 
 func (a *App) wrapMiddlewares(h http.Handler) http.Handler {
+	if h == nil {
+		h = http.NotFoundHandler()
+	}
+
+	lg := zap.NewNop()
+	if a != nil && a.Logger != nil {
+		lg = a.Logger
+	}
+
 	return middleware.Chain(
 		h,
 		middleware.RequestID,
-		middleware.Recovery(a.Logger),
-		middleware.AccessLog(a.Logger, middleware.AccessLogConfig{Enabled: true}),
+		middleware.Recovery(lg),
+		middleware.AccessLog(lg, middleware.AccessLogConfig{Enabled: true}),
 	)
 }
 
 func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
+	serviceName := "gpu-agent"
+	nodeName := ""
+
+	if a != nil && a.Config != nil {
+		if a.Config.Service.Name != "" {
+			serviceName = a.Config.Service.Name
+		}
+		nodeName = a.Config.Agent.NodeName
+	}
+
 	writeJSON(w, http.StatusOK, healthResponse{
 		Code:      0,
 		Message:   "ok",
@@ -82,8 +106,8 @@ func (a *App) handleRoot(w http.ResponseWriter, r *http.Request) {
 			Time:    time.Now().UTC().Format(time.RFC3339Nano),
 			Version: version.Get(),
 			Details: map[string]string{
-				"service": a.Config.Service.Name,
-				"node":    a.Config.Agent.NodeName,
+				"service": serviceName,
+				"node":    nodeName,
 			},
 		},
 	})
@@ -103,7 +127,12 @@ func (a *App) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	ok, details := a.Readiness(r.Context())
+	ok := true
+	details := map[string]string{}
+
+	if a != nil {
+		ok, details = a.Readiness(r.Context())
+	}
 
 	statusCode := http.StatusOK
 	status := "ready"
@@ -128,29 +157,55 @@ func (a *App) handleReadyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	if w == nil {
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
 func (a *App) registerLifecycleHooks() {
+	if a == nil || a.Lifecycle == nil {
+		return
+	}
+
+	lg := zap.NewNop()
+	if a.Logger != nil {
+		lg = a.Logger
+	}
+
 	a.Lifecycle.AppendOnStart(func(ctx context.Context) error {
-		a.Logger.Info("agent lifecycle start hook completed")
+		lg.Info("agent lifecycle start hook completed")
 		return nil
 	})
 
 	a.Lifecycle.AppendOnStop(func(ctx context.Context) error {
+		if a.TracingCloser == nil {
+			return nil
+		}
 		if err := a.TracingCloser.Shutdown(ctx); err != nil {
-			a.Logger.Warn("shutdown tracing failed", zap.Error(err))
+			lg.Warn("shutdown tracing failed", zap.Error(err))
 		}
 		return nil
 	})
 
 	a.Lifecycle.AppendOnStop(func(ctx context.Context) error {
-		return bootstrap.ShutdownHTTPServer(a.Logger, a.HTTPServer, a.metricsHTTPConfig().ShutdownTimeout)
+		if a.HTTPServer == nil {
+			return nil
+		}
+		return bootstrap.ShutdownHTTPServer(lg, a.HTTPServer, a.metricsHTTPConfig().ShutdownTimeout)
 	})
 }
 
 func bootstrapRunHTTPServer(a *App, ctx context.Context) error {
-	return bootstrap.RunHTTPServer(ctx, a.Logger, a.HTTPServer)
+	if a == nil || a.HTTPServer == nil {
+		return nil
+	}
+
+	lg := zap.NewNop()
+	if a.Logger != nil {
+		lg = a.Logger
+	}
+	return bootstrap.RunHTTPServer(ctx, lg, a.HTTPServer)
 }
